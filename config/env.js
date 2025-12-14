@@ -20,8 +20,6 @@ const requiredEnvVars = {
     'PORT',
     'JWT_EXPIRES_IN',
     'ALLOWED_ORIGINS',
-    'TWILIO_ACCOUNT_SID',
-    'TWILIO_AUTH_TOKEN',
     'EMAIL_USER',
     'EMAIL_PASS',
     'AVIATIONSTACK_API_KEY',
