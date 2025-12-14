@@ -190,8 +190,11 @@ const assignDriverToVendorTransfer = async (req, res) => {
       });
     }
 
-    // Assign driver
-    await transfer.assignDriver(driverDetails, `vendor:${vendorId}`);
+    // Assign driver (doesn't save yet)
+    transfer.assignDriver(driverDetails, `vendor:${vendorId}`);
+    
+    // Save the transfer first
+    await transfer.save();
 
     // Send notification to customer
     try {
@@ -210,11 +213,13 @@ const assignDriverToVendorTransfer = async (req, res) => {
         'whatsapp'
       );
 
-      await transfer.addNotificationRecord(
+      // Record notification in transfer and save again
+      transfer.addNotificationRecord(
         'whatsapp',
         message,
         transfer.customer_details.contact_number
       );
+      await transfer.save();
     } catch (notificationError) {
       console.error('Failed to send driver assignment notification:', notificationError);
     }
@@ -266,7 +271,7 @@ const updateVendorDriverStatus = async (req, res) => {
       transfer.assigned_driver_details.location = location;
     }
     
-    await transfer.addAuditLog('driver_updated', `vendor:${vendorId}`, `Driver status changed to ${status}`);
+    transfer.addAuditLog('driver_updated', `vendor:${vendorId}`, `Driver status changed to ${status}`);
     await transfer.save();
 
     // Send status update notification if driver is waiting

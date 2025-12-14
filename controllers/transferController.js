@@ -1,11 +1,13 @@
 const Transfer = require('../models/Transfer');
+const mongoose = require('mongoose');
 const { sendTemplatedEmail } = require('../config/nodemailer');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
 
-// Check if we're using mock data
+// Check if we're using mock data - check actual MongoDB connection status
 const isUsingMockData = () => {
-  return !process.env.MONGODB_URI || process.env.MONGODB_URI === 'mongodb://localhost:27017/halo';
+  // Use mock data only if MongoDB is not connected
+  return mongoose.connection.readyState !== 1; // 1 = connected
 };
 
 // Get the appropriate Transfer model
@@ -33,8 +35,50 @@ const createTransfer = async (req, res) => {
       });
     }
 
+    // Validate and convert customer_id and vendor_id to ObjectId
+    if (!transferData.customer_id || transferData.customer_id === '' || transferData.customer_id === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required field',
+        error: 'customer_id is required and cannot be empty'
+      });
+    }
+    
+    if (!transferData.vendor_id || transferData.vendor_id === '' || transferData.vendor_id === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required field',
+        error: 'vendor_id is required and cannot be empty'
+      });
+    }
+
+    // Convert customer_id to ObjectId if it's a string
+    if (typeof transferData.customer_id === 'string') {
+      if (!mongoose.Types.ObjectId.isValid(transferData.customer_id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid customer_id format',
+          error: `customer_id "${transferData.customer_id}" must be a valid MongoDB ObjectId (24 hex characters)`
+        });
+      }
+      transferData.customer_id = new mongoose.Types.ObjectId(transferData.customer_id);
+    }
+    
+    // Convert vendor_id to ObjectId if it's a string
+    if (typeof transferData.vendor_id === 'string') {
+      if (!mongoose.Types.ObjectId.isValid(transferData.vendor_id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid vendor_id format',
+          error: `vendor_id "${transferData.vendor_id}" must be a valid MongoDB ObjectId (24 hex characters)`
+        });
+      }
+      transferData.vendor_id = new mongoose.Types.ObjectId(transferData.vendor_id);
+    }
+
     // Create new transfer
     const transfer = new TransferModel(transferData);
+    
     await transfer.save();
 
     // Send confirmation email to customer
@@ -105,6 +149,7 @@ const getTransfer = async (req, res) => {
 const getTransfers = async (req, res) => {
   try {
     const TransferModel = getTransferModel();
+    const mongoose = require('mongoose');
     const {
       page = 1,
       limit = 10,
@@ -120,11 +165,71 @@ const getTransfers = async (req, res) => {
     // Build filter object
     const filter = {};
     
-    if (status) {
-      filter['transfer_details.status'] = status;
+    // If user is VENDOR, automatically filter by their vendor details
+    if (req.user && req.user.role === 'VENDOR') {
+      // Match transfers by vendor email or company name
+      const vendorEmail = req.user.email;
+      const vendorCompanyName = req.user.vendorDetails?.companyName;
+      
+      if (vendorEmail || vendorCompanyName) {
+        // Build OR condition to match by email or company name
+        const vendorConditions = [];
+        
+        if (vendorEmail) {
+          vendorConditions.push({ 'vendor_details.email': vendorEmail });
+        }
+        
+        if (vendorCompanyName) {
+          vendorConditions.push({ 'vendor_details.vendor_name': vendorCompanyName });
+        }
+        
+        // Also try to match by vendor_id ObjectId if Vendor model exists
+        const VendorModel = mongoose.connection.readyState === 1 
+          ? require('../models/Vendor')
+          : null;
+        
+        if (VendorModel && mongoose.connection.readyState === 1) {
+          try {
+            let vendor = null;
+            if (vendorCompanyName) {
+              vendor = await VendorModel.findOne({ companyName: vendorCompanyName });
+            }
+            if (!vendor && vendorEmail) {
+              vendor = await VendorModel.findOne({ 'contactPerson.email': vendorEmail });
+            }
+            if (vendor) {
+              vendorConditions.push({ vendor_id: vendor._id });
+            }
+          } catch (err) {
+            console.error('Error finding vendor:', err);
+          }
+        }
+        
+        if (vendorConditions.length > 0) {
+          filter.$or = filter.$or || [];
+          filter.$or.push(...vendorConditions);
+        } else {
+          // No matching criteria found, return empty results
+          return res.json({
+            success: true,
+            data: [],
+            pagination: {
+              current: parseInt(page),
+              pages: 0,
+              total: 0,
+              limit: parseInt(limit)
+            }
+          });
+        }
+      }
     }
     
-    if (vendor_id) {
+    if (status) {
+      filter['transfer_details.transfer_status'] = status;
+    }
+    
+    // Only apply vendor_id filter from query if user is not VENDOR (admins can filter)
+    if (vendor_id && (!req.user || req.user.role !== 'VENDOR')) {
       filter['vendor_details.vendor_id'] = vendor_id;
     }
     
@@ -133,41 +238,65 @@ const getTransfers = async (req, res) => {
     }
     
     if (flight_no) {
-      filter['flight_details.flight_number'] = flight_no.toUpperCase();
+      filter['flight_details.flight_no'] = flight_no.toUpperCase();
     }
     
     if (date_from || date_to) {
-      filter['flight_details.scheduled_arrival'] = {};
+      filter['flight_details.arrival_time'] = {};
       if (date_from) {
-        filter['flight_details.scheduled_arrival'].$gte = new Date(date_from);
+        filter['flight_details.arrival_time'].$gte = new Date(date_from);
       }
       if (date_to) {
-        filter['flight_details.scheduled_arrival'].$lte = new Date(date_to);
+        filter['flight_details.arrival_time'].$lte = new Date(date_to);
       }
     }
     
     if (search) {
-      filter.$or = [
+      // Combine search conditions with vendor filter if both exist
+      const searchConditions = [
         { _id: { $regex: search, $options: 'i' } },
         { 'customer_details.name': { $regex: search, $options: 'i' } },
         { 'customer_details.email': { $regex: search, $options: 'i' } },
-        { 'flight_details.flight_number': { $regex: search, $options: 'i' } },
+        { 'flight_details.flight_no': { $regex: search, $options: 'i' } },
         { 'vendor_details.vendor_name': { $regex: search, $options: 'i' } }
       ];
+      
+      // If vendor filter already created $or, we need to combine properly
+      if (filter.$or && filter.$or.length > 0) {
+        // Vendor filter exists - combine: (vendor conditions) AND (search conditions)
+        // We need to use $and to combine $or arrays
+        const existingOr = [...filter.$or];
+        delete filter.$or;
+        filter.$and = [
+          { $or: existingOr },
+          { $or: searchConditions }
+        ];
+      } else {
+        filter.$or = searchConditions;
+      }
     }
 
     // Execute query with pagination
-    const transfers = await TransferModel.find(filter);
-    const total = transfers.length;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const transfers = await TransferModel.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .skip(skip)
+      .lean();
+    
+    // Get total count for pagination (only for real MongoDB, mock data already has length)
+    const total = mongoose.connection.readyState === 1 
+      ? await TransferModel.countDocuments(filter)
+      : transfers.length;
 
     res.json({
       success: true,
       data: transfers,
       pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
+        current: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit)),
         total,
-        limit
+        limit: parseInt(limit)
       }
     });
   } catch (error) {
@@ -219,8 +348,10 @@ const assignDriver = async (req, res) => {
   try {
     const { id } = req.params;
     const driverDetails = req.body;
+    const TransferModel = getTransferModel();
+    const mongoose = require('mongoose');
     
-    const transfer = await Transfer.findById(id);
+    const transfer = await TransferModel.findById(id);
     if (!transfer) {
       return res.status(404).json({
         success: false,
@@ -229,8 +360,25 @@ const assignDriver = async (req, res) => {
       });
     }
 
-    // Assign driver
-    await transfer.assignDriver(driverDetails, 'api');
+    // If user is VENDOR, verify they own this transfer
+    // The authorizeResource middleware already checked this, but double-check here
+    if (req.user && req.user.role === 'VENDOR') {
+      const userIdString = req.user._id.toString();
+      const vendorIdString = transfer.vendor_id ? transfer.vendor_id.toString() : null;
+      
+      if (!vendorIdString || vendorIdString !== userIdString) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. This transfer does not belong to your vendor account.'
+        });
+      }
+    }
+
+    // Assign driver (doesn't save yet)
+    transfer.assignDriver(driverDetails, req.user ? `user:${req.user._id}` : 'api');
+    
+    // Save the transfer first before sending notifications
+    await transfer.save();
 
     // Send notification to customer
     try {
@@ -265,12 +413,13 @@ const assignDriver = async (req, res) => {
         ]
       );
 
-      // Record notification in transfer
-      await transfer.addNotificationRecord(
+      // Record notification in transfer and save again
+      transfer.addNotificationRecord(
         'whatsapp',
         message,
         transfer.customer_details.contact_number
       );
+      await transfer.save();
     } catch (notificationError) {
       console.error('Failed to send driver assignment notification:', notificationError);
       // Don't fail the request if notification fails
@@ -319,7 +468,7 @@ const updateDriverStatus = async (req, res) => {
       transfer.assigned_driver_details.location = location;
     }
     
-    await transfer.addAuditLog('driver_updated', 'api', `Driver status changed to ${status}`);
+    transfer.addAuditLog('driver_updated', 'api', `Driver status changed to ${status}`);
     await transfer.save();
 
     // Send status update notification if driver is waiting
@@ -359,6 +508,110 @@ const updateDriverStatus = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update driver status',
+      error: error.message
+    });
+  }
+};
+
+// Confirm traveler pickup
+const confirmTravelerPickup = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action } = req.body; // 'pickup' or 'drop'
+    
+    const transfer = await Transfer.findById(id);
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found',
+        apexId: id
+      });
+    }
+
+    if (!transfer.assigned_driver_details) {
+      return res.status(400).json({
+        success: false,
+        message: 'No driver assigned to this transfer'
+      });
+    }
+
+    if (action === 'pickup') {
+      transfer.assigned_driver_details.traveler_picked_up = true;
+      transfer.assigned_driver_details.pickup_time = new Date();
+      transfer.assigned_driver_details.status = 'enroute';
+      transfer.transfer_details.transfer_status = 'in_progress';
+      
+      const userRole = req.user?.role || 'api';
+      const actionBy = userRole === 'VENDOR' || userRole === 'VENDOR_MANAGER' 
+        ? 'vendor' 
+        : userRole === 'DRIVER' 
+        ? 'driver' 
+        : 'admin';
+      
+      transfer.addAuditLog(
+        'pickup_confirmed', 
+        req.user ? `user:${req.user._id}` : 'api', 
+        `${actionBy === 'vendor' ? 'Vendor' : actionBy === 'driver' ? 'Driver' : 'Admin'} confirmed traveler pickup at ${new Date().toLocaleString()}`
+      );
+
+      // Send notification to customer
+      try {
+        const message = `✅ Your driver ${transfer.assigned_driver_details.name} has picked up the traveler and is heading to ${transfer.transfer_details.drop_location}.`;
+        await sendNotification(
+          transfer.customer_details.contact_number,
+          message,
+          'whatsapp'
+        );
+        transfer.addNotificationRecord('whatsapp', message, transfer.customer_details.contact_number);
+      } catch (notificationError) {
+        console.error('Failed to send pickup notification:', notificationError);
+      }
+    } else if (action === 'drop') {
+      transfer.assigned_driver_details.arrived_at_drop = true;
+      transfer.assigned_driver_details.drop_time = new Date();
+      transfer.assigned_driver_details.status = 'completed';
+      transfer.transfer_details.transfer_status = 'completed';
+      transfer.transfer_details.actual_drop_time = new Date();
+      
+      const userRole = req.user?.role || 'api';
+      const actionBy = userRole === 'VENDOR' || userRole === 'VENDOR_MANAGER' 
+        ? 'vendor' 
+        : userRole === 'DRIVER' 
+        ? 'driver' 
+        : 'admin';
+      
+      transfer.addAuditLog(
+        'drop_confirmed', 
+        req.user ? `user:${req.user._id}` : 'api', 
+        `${actionBy === 'vendor' ? 'Vendor' : actionBy === 'driver' ? 'Driver' : 'Admin'} confirmed traveler drop-off at ${new Date().toLocaleString()}`
+      );
+
+      // Send notification to customer
+      try {
+        const message = `✅ Transfer completed! Your traveler has been dropped off at ${transfer.transfer_details.drop_location}. Thank you for using HALO.`;
+        await sendNotification(
+          transfer.customer_details.contact_number,
+          message,
+          'whatsapp'
+        );
+        transfer.addNotificationRecord('whatsapp', message, transfer.customer_details.contact_number);
+      } catch (notificationError) {
+        console.error('Failed to send drop notification:', notificationError);
+      }
+    }
+
+    await transfer.save();
+
+    res.json({
+      success: true,
+      message: action === 'pickup' ? 'Pickup confirmed successfully' : 'Drop-off confirmed successfully',
+      data: transfer
+    });
+  } catch (error) {
+    console.error('Error confirming action:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to confirm action',
       error: error.message
     });
   }
@@ -422,27 +675,58 @@ const getTransferStats = async (req, res) => {
       });
     }
 
+    // Get status aggregation - use correct field path
     const stats = await TransferModel.aggregate([
       {
         $group: {
-          _id: '$transfer_details.status',
+          _id: '$transfer_details.transfer_status',
           count: { $sum: 1 }
         }
       }
     ]);
 
     const totalTransfers = await TransferModel.countDocuments();
+    
+    // Today's transfers - use correct field path
+    const today = new Date();
+    const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+    const endOfDay = new Date(today.setHours(23, 59, 59, 999));
     const todayTransfers = await TransferModel.countDocuments({
-      'flight_details.scheduled_arrival': {
-        $gte: new Date(new Date().setHours(0, 0, 0, 0)),
-        $lt: new Date(new Date().setHours(23, 59, 59, 999))
+      'flight_details.arrival_time': {
+        $gte: startOfDay,
+        $lte: endOfDay
       }
     });
 
     const upcomingTransfers = await TransferModel.countDocuments({
-      'flight_details.scheduled_arrival': { $gte: new Date() },
-      'transfer_details.status': { $in: ['pending', 'assigned', 'enroute'] }
+      'flight_details.arrival_time': { $gte: new Date() },
+      'transfer_details.transfer_status': { $in: ['pending', 'assigned', 'enroute'] }
     });
+
+    // Calculate success rate (completed / total)
+    const completedCount = stats.find(s => s._id === 'completed')?.count || 0;
+    const successRate = totalTransfers > 0 
+      ? Math.round((completedCount / totalTransfers) * 100 * 10) / 10 // Round to 1 decimal
+      : 0;
+
+    // Count active drivers (drivers with assigned transfers)
+    const activeDriversResult = await TransferModel.aggregate([
+      {
+        $match: {
+          'assigned_driver_details.driver_id': { $exists: true, $ne: null },
+          'transfer_details.transfer_status': { $in: ['assigned', 'enroute', 'waiting', 'in_progress'] }
+        }
+      },
+      {
+        $group: {
+          _id: '$assigned_driver_details.driver_id'
+        }
+      },
+      {
+        $count: 'activeDrivers'
+      }
+    ]);
+    const activeDrivers = activeDriversResult[0]?.activeDrivers || 0;
 
     res.json({
       success: true,
@@ -450,6 +734,8 @@ const getTransferStats = async (req, res) => {
         total: totalTransfers,
         today: todayTransfers,
         upcoming: upcomingTransfers,
+        successRate: successRate,
+        activeDrivers: activeDrivers,
         byStatus: stats.reduce((acc, stat) => {
           acc[stat._id] = stat.count;
           return acc;
@@ -466,6 +752,134 @@ const getTransferStats = async (req, res) => {
   }
 };
 
+// Update client details (flight info, passengers, luggage, notes)
+const updateClientDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { flight_details, customer_details, transfer_details } = req.body;
+    const userId = req.user._id;
+    const userRole = req.user.role;
+
+    // Find the transfer
+    const transfer = await Transfer.findById(id);
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found'
+      });
+    }
+
+    // Check if user is the customer or has admin rights
+    if (userRole !== 'SUPER_ADMIN' && userRole !== 'ADMIN' && String(transfer.customer_id) !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to update this transfer'
+      });
+    }
+
+    // Update the transfer fields
+    if (flight_details) {
+      transfer.flight_details = {
+        ...transfer.flight_details,
+        ...flight_details
+      };
+    }
+
+    if (customer_details) {
+      transfer.customer_details = {
+        ...transfer.customer_details,
+        ...customer_details
+      };
+    }
+
+    if (transfer_details && transfer_details.special_notes !== undefined) {
+      transfer.transfer_details = {
+        ...transfer.transfer_details,
+        special_notes: transfer_details.special_notes
+      };
+    }
+
+    // Add audit log entry
+    transfer.audit_log.push({
+      action: 'client_details_updated',
+      timestamp: new Date(),
+      by: `user:${userId}`,
+      details: 'Client updated transfer details (flight info, passengers, notes)'
+    });
+
+    await transfer.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Transfer details updated successfully',
+      data: transfer
+    });
+  } catch (error) {
+    console.error('Error updating client details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update transfer details',
+      error: error.message
+    });
+  }
+};
+
+// Assign traveler to transfer
+const assignTraveler = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { traveler_id, traveler_details } = req.body;
+    const userId = req.user._id;
+    const userRole = req.user.role;
+
+    // Find the transfer
+    const transfer = await Transfer.findById(id);
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found'
+      });
+    }
+
+    // Check if user is the customer or has admin rights
+    if (userRole !== 'SUPER_ADMIN' && userRole !== 'ADMIN' && String(transfer.customer_id) !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to assign travelers to this transfer'
+      });
+    }
+
+    // Update traveler information
+    transfer.traveler_id = traveler_id;
+    transfer.traveler_details = traveler_details;
+
+    // Add audit log entry
+    transfer.audit_log.push({
+      action: 'traveler_assigned',
+      timestamp: new Date(),
+      by: `user:${userId}`,
+      details: `Traveler ${traveler_details.name} assigned to transfer`
+    });
+
+    await transfer.save();
+
+    console.log('Traveler assigned successfully:', traveler_details.name);
+
+    res.status(200).json({
+      success: true,
+      message: 'Traveler assigned successfully',
+      data: transfer
+    });
+  } catch (error) {
+    console.error('Error assigning traveler:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign traveler',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createTransfer,
   getTransfer,
@@ -473,6 +887,9 @@ module.exports = {
   updateTransfer,
   assignDriver,
   updateDriverStatus,
+  confirmTravelerPickup,
   deleteTransfer,
-  getTransferStats
+  getTransferStats,
+  updateClientDetails,
+  assignTraveler
 };

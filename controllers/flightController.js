@@ -115,7 +115,7 @@ const syncFlightStatus = async (req, res) => {
       transfer.flight_details.arrival_time = new Date(originalArrival.getTime() + (flightData.delay_minutes * 60000));
     }
     
-    await transfer.addAuditLog('flight_updated', 'api_sync', `Flight status synced: ${oldStatus} → ${flightData.status}`);
+    transfer.addAuditLog('flight_updated', 'api_sync', `Flight status synced: ${oldStatus} → ${flightData.status}`);
     await transfer.save();
 
     // Send notifications if status changed
@@ -186,7 +186,7 @@ const batchSyncFlights = async (req, res) => {
           transfer.flight_details.gate = flightData.data.gate || transfer.flight_details.gate;
           transfer.flight_details.terminal = flightData.data.terminal || transfer.flight_details.terminal;
           
-          await transfer.addAuditLog('flight_updated', 'batch_sync', `Batch sync: ${oldStatus} → ${flightData.data.status}`);
+          transfer.addAuditLog('flight_updated', 'batch_sync', `Batch sync: ${oldStatus} → ${flightData.data.status}`);
           await transfer.save();
           
           updateResults.push({

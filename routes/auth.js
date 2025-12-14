@@ -3,17 +3,31 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { authenticate, authorize, rateLimit } = require('../middleware/auth');
+const { MockUser } = require('../services/mockUserService');
+const { authenticate, authorize } = require('../middleware/auth');
+const { authLimiter, registrationLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
+const { logAuthEvent } = require('../middleware/auditLogger');
 
-// Rate limiting for auth endpoints
-const authRateLimit = rateLimit(5, 15 * 60 * 1000); // 5 requests per 15 minutes
+// Check if we're using mock data
+const isUsingMockData = () => {
+  const mongoose = require('mongoose');
+  // Use mock data only if MongoDB is not connected
+  return mongoose.connection.readyState !== 1; // 1 = connected
+};
+
+// Get the appropriate User model
+const getUserModel = () => {
+  const mongoose = require('mongoose');
+  // Use real database if MongoDB is connected, otherwise use mock
+  return mongoose.connection.readyState === 1 ? User : MockUser;
+};
 
 /**
  * @route   POST /api/auth/register
- * @desc    Register a new user
- * @access  Public (with role restrictions)
+ * @desc    Register a new user (Restricted - only Super Admin/Admin can create accounts)
+ * @access  Private (Super Admin/Admin only)
  */
-router.post('/register', authRateLimit, async (req, res) => {
+router.post('/register', registrationLimiter, authenticate, authorize('SUPER_ADMIN', 'ADMIN'), async (req, res) => {
   try {
     const {
       username,
@@ -121,7 +135,7 @@ router.post('/register', authRateLimit, async (req, res) => {
  * @desc    Login user
  * @access  Public
  */
-router.post('/login', authRateLimit, async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -133,7 +147,23 @@ router.post('/login', authRateLimit, async (req, res) => {
     }
 
     // Find user by email
-    const user = await User.findOne({ email }).select('+password');
+    const mongoose = require('mongoose');
+    const UserModel = getUserModel();
+    let user;
+    
+    if (mongoose.connection.readyState === 1) {
+      // Real MongoDB - use Mongoose query with password field
+      user = await UserModel.findOne({ email }).select('+password');
+    } else {
+      // Mock data - find user directly from the Map to get the actual instance
+      const { MockUserService } = require('../services/mockUserService');
+      for (const u of MockUserService.users.values()) {
+        if (u.email === email) {
+          user = u;
+          break;
+        }
+      }
+    }
     
     if (!user) {
       return res.status(401).json({
@@ -163,6 +193,7 @@ router.post('/login', authRateLimit, async (req, res) => {
     
     if (!isPasswordValid) {
       await user.incrementLoginAttempts();
+      await logAuthEvent(req, 'login_failure', 'failure', { email });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -174,6 +205,9 @@ router.post('/login', authRateLimit, async (req, res) => {
 
     // Generate token
     const token = user.generateAuthToken();
+    
+    // Log successful login
+    await logAuthEvent(req, 'login_success', 'success', { email, userId: user._id });
 
     res.json({
       success: true,
@@ -351,27 +385,17 @@ router.get('/roles', authenticate, authorize('SUPER_ADMIN', 'ADMIN'), (req, res)
     {
       value: 'ADMIN',
       label: 'Administrator',
-      description: 'Full transfer and vendor management'
+      description: 'Full transfer and vendor/client management'
     },
     {
-      value: 'OPERATIONS_MANAGER',
-      label: 'Operations Manager',
-      description: 'Transfer oversight and driver coordination'
+      value: 'VENDOR',
+      label: 'Vendor',
+      description: 'Manage drivers and handle assigned client transfers'
     },
     {
-      value: 'VENDOR_MANAGER',
-      label: 'Vendor Manager',
-      description: 'Manage vendor-specific transfers and drivers'
-    },
-    {
-      value: 'DRIVER',
-      label: 'Driver',
-      description: 'View assigned transfers and update status'
-    },
-    {
-      value: 'CUSTOMER',
-      label: 'Customer',
-      description: 'View own transfers and track status'
+      value: 'CLIENT',
+      label: 'Client',
+      description: 'Manage travelers and view assigned vendor transfers'
     }
   ];
 

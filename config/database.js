@@ -3,20 +3,22 @@ const mongoose = require('mongoose');
 const connectDB = async () => {
   try {
     // Check if MongoDB URI is configured
-    if (!process.env.MONGODB_URI || process.env.MONGODB_URI === 'mongodb://localhost:27017/halo') {
-      console.warn('⚠️ MongoDB not configured. Using in-memory mode for demo purposes.');
+    if (!process.env.MONGODB_URI) {
+      console.warn('⚠️ MONGODB_URI not found in environment variables.');
+      console.warn('⚠️ Using in-memory mode for demo purposes.');
       console.warn('⚠️ Data will not persist between server restarts.');
+      console.warn('📝 To enable database: Create .env file and set MONGODB_URI');
+      console.warn('📝 See MONGODB_SETUP_GUIDE.md for instructions\n');
       return null;
     }
 
+    // Allow local MongoDB connections (for local development)
+    // Only skip if it's the exact default localhost URI without actual setup
+
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       maxPoolSize: 10, // Maintain up to 10 socket connections
       serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
       socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      bufferMaxEntries: 0, // Disable mongoose buffering
-      bufferCommands: false, // Disable mongoose buffering
     });
 
     console.log(`✅ MongoDB Connected: ${conn.connection.host}`);

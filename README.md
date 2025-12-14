@@ -89,7 +89,7 @@ npm run dev
 npm start
 ```
 
-The server will start on `http://localhost:3000`
+The server will start on `http://localhost:0707`
 
 ## 📚 API Documentation
 
@@ -124,7 +124,7 @@ The server will start on `http://localhost:3000`
 
 #### Create a Transfer
 ```bash
-curl -X POST http://localhost:3000/api/transfers \
+curl -X POST http://localhost:0707/api/transfers \
   -H "Content-Type: application/json" \
   -d '{
     "_id": "APX123456",
@@ -161,7 +161,7 @@ curl -X POST http://localhost:3000/api/transfers \
 
 #### Assign a Driver
 ```bash
-curl -X PUT http://localhost:3000/api/transfers/APX123456/driver \
+curl -X PUT http://localhost:0707/api/transfers/APX123456/driver \
   -H "Content-Type: application/json" \
   -d '{
     "driver_id": "DRV102",
@@ -320,7 +320,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
 COPY . .
-EXPOSE 3000
+EXPOSE 707
 CMD ["npm", "start"]
 ```
 

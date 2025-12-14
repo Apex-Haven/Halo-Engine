@@ -9,8 +9,11 @@ const {
   updateTransfer,
   assignDriver,
   updateDriverStatus,
+  confirmTravelerPickup,
   deleteTransfer,
-  getTransferStats
+  getTransferStats,
+  updateClientDetails,
+  assignTraveler
 } = require('../controllers/transferController');
 
 // Import validation middleware
@@ -18,6 +21,7 @@ const {
   validateTransfer,
   validateDriverAssignment,
   validateDriverStatusUpdate,
+  validateDriverConfirmAction,
   validateQueryParams,
   validateApexId
 } = require('../middleware/validation');
@@ -68,9 +72,9 @@ router.put('/:id', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN
 /**
  * @route   PUT /api/transfers/:id/driver
  * @desc    Assign or update driver for transfer
- * @access  Private (Admin, Operations Manager, Vendor Manager)
+ * @access  Private (Admin, Operations Manager, Vendor Manager, Vendor)
  */
-router.put('/:id/driver', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER'), authorizeResource('transfer'), validateDriverAssignment, assignDriver);
+router.put('/:id/driver', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR'), authorizeResource('transfer'), validateDriverAssignment, assignDriver);
 
 /**
  * @route   PUT /api/transfers/:id/driver/status
@@ -78,6 +82,27 @@ router.put('/:id/driver', authenticate, validateApexId, authorize('SUPER_ADMIN',
  * @access  Private (Driver, Vendor Manager, Admin)
  */
 router.put('/:id/driver/status', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'DRIVER'), authorizeResource('transfer'), validateDriverStatusUpdate, updateDriverStatus);
+
+/**
+ * @route   PUT /api/transfers/:id/driver/confirm
+ * @desc    Confirm traveler pickup or drop-off
+ * @access  Private (Vendor, Vendor Manager, Admin)
+ */
+router.put('/:id/driver/confirm', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR'), authorizeResource('transfer'), validateDriverConfirmAction, confirmTravelerPickup);
+
+/**
+ * @route   PUT /api/transfers/:id/client-details
+ * @desc    Update client details (flight info, passengers, luggage, notes)
+ * @access  Private (Client, Admin)
+ */
+router.put('/:id/client-details', authenticate, validateApexId, updateClientDetails);
+
+/**
+ * @route   PUT /api/transfers/:id/traveler
+ * @desc    Assign traveler to transfer
+ * @access  Private (Client, Admin)
+ */
+router.put('/:id/traveler', authenticate, validateApexId, assignTraveler);
 
 /**
  * @route   DELETE /api/transfers/:id

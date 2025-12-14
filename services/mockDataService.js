@@ -1,46 +1,66 @@
 // Mock data service for demo purposes when MongoDB is not available
+// Generate dynamic dates relative to now
+const now = new Date();
+const in2Hours = new Date(now.getTime() + (2 * 60 * 60 * 1000));
+const in4Hours = new Date(now.getTime() + (4 * 60 * 60 * 1000));
+const in8Hours = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+const in12Hours = new Date(now.getTime() + (12 * 60 * 60 * 1000));
+const in20Hours = new Date(now.getTime() + (20 * 60 * 60 * 1000));
+const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+
 const mockTransfers = [
   {
     _id: 'APX123456',
     customer_details: {
       name: 'Jane Doe',
       email: 'jane.doe@example.com',
-      phone: '+1234567890',
-      whatsapp: '+1234567890'
+      contact_number: '+1234567890',
+      no_of_passengers: 2,
+      luggage_count: 3
     },
     flight_details: {
-      flight_number: 'AI202',
+      flight_no: 'AI202',
       airline: 'Air India',
       departure_airport: 'DXB',
       arrival_airport: 'BOM',
-      scheduled_arrival: new Date('2024-01-15T14:30:00Z'),
-      actual_arrival: new Date('2024-01-15T14:45:00Z'),
-      status: 'landed',
+      departure_time: yesterday,
+      arrival_time: in2Hours,
+      status: 'on_time',
+      delay_minutes: 0,
+      gate: 'B12',
       terminal: 'T2'
     },
     transfer_details: {
       pickup_location: 'Mumbai Airport T2',
       drop_location: 'Grand Hyatt Hotel',
-      transfer_type: 'arrival',
-      status: 'completed',
-      estimated_pickup_time: new Date('2024-01-15T15:00:00Z'),
-      actual_pickup_time: new Date('2024-01-15T15:05:00Z'),
-      estimated_drop_time: new Date('2024-01-15T16:00:00Z'),
-      actual_drop_time: new Date('2024-01-15T16:10:00Z')
+      event_place: 'Grand Hyatt Convention Center',
+      transfer_status: 'assigned',
+      estimated_pickup_time: new Date(in2Hours.getTime() + (30 * 60 * 1000)),
+      actual_pickup_time: null,
+      estimated_drop_time: new Date(in2Hours.getTime() + (90 * 60 * 1000)),
+      actual_drop_time: null,
+      special_notes: 'VIP guest, priority handling required'
     },
     vendor_details: {
       vendor_id: 'V001',
       vendor_name: 'Mumbai Transfers Ltd',
       contact_person: 'Raj Kumar',
-      phone: '+919876543210'
+      contact_number: '+919876543210',
+      email: 'contact@mumbaitransfers.com'
     },
     assigned_driver_details: {
       driver_id: 'D001',
-      driver_name: 'John Doe',
-      phone: '+919876543211',
+      name: 'John Doe',
+      contact_number: '+919876543211',
       vehicle_type: 'Toyota Innova',
       vehicle_number: 'MH01AB1234',
-      license_number: 'DL123456789'
+      status: 'assigned',
+      location: {
+        latitude: 19.0896,
+        longitude: 72.8656,
+        address: 'Mumbai Airport Area'
+      },
+      assigned_at: now
     },
     notifications: {
       sent: [
@@ -81,43 +101,53 @@ const mockTransfers = [
     customer_details: {
       name: 'Mike Johnson',
       email: 'mike.johnson@example.com',
-      phone: '+1234567891',
-      whatsapp: '+1234567891'
+      contact_number: '+1234567891',
+      no_of_passengers: 1,
+      luggage_count: 2
     },
     flight_details: {
-      flight_number: 'EK501',
+      flight_no: 'EK501',
       airline: 'Emirates',
       departure_airport: 'DXB',
       arrival_airport: 'BOM',
-      scheduled_arrival: new Date('2024-01-15T16:00:00Z'),
-      actual_arrival: null,
+      departure_time: new Date(in4Hours.getTime() - (4 * 60 * 60 * 1000)),
+      arrival_time: in4Hours,
       status: 'delayed',
-      terminal: 'T2',
-      delay_minutes: 45
+      delay_minutes: 45,
+      gate: 'A5',
+      terminal: 'T2'
     },
     transfer_details: {
       pickup_location: 'Mumbai Airport T2',
       drop_location: 'Taj Mahal Palace',
-      transfer_type: 'arrival',
-      status: 'in_progress',
-      estimated_pickup_time: new Date('2024-01-15T16:30:00Z'),
+      event_place: 'Taj Business Center',
+      transfer_status: 'assigned',
+      estimated_pickup_time: new Date(in4Hours.getTime() + (45 * 60 * 1000)),
       actual_pickup_time: null,
-      estimated_drop_time: new Date('2024-01-15T17:30:00Z'),
-      actual_drop_time: null
+      estimated_drop_time: new Date(in4Hours.getTime() + (105 * 60 * 1000)),
+      actual_drop_time: null,
+      special_notes: 'Flight delayed, driver notified'
     },
     vendor_details: {
       vendor_id: 'V002',
       vendor_name: 'Luxury Transfers Mumbai',
       contact_person: 'Priya Sharma',
-      phone: '+919876543212'
+      contact_number: '+919876543212',
+      email: 'luxury@mumbaitransfers.com'
     },
     assigned_driver_details: {
       driver_id: 'D002',
-      driver_name: 'Sarah Wilson',
-      phone: '+919876543213',
+      name: 'Sarah Wilson',
+      contact_number: '+919876543213',
       vehicle_type: 'Mercedes E-Class',
       vehicle_number: 'MH02CD5678',
-      license_number: 'DL987654321'
+      status: 'enroute',
+      location: {
+        latitude: 19.0965,
+        longitude: 72.8721,
+        address: 'Approaching Mumbai Airport'
+      },
+      assigned_at: new Date(now.getTime() - (30 * 60 * 1000))
     },
     notifications: {
       sent: [
@@ -158,43 +188,41 @@ const mockTransfers = [
     customer_details: {
       name: 'David Brown',
       email: 'david.brown@example.com',
-      phone: '+1234567892',
-      whatsapp: '+1234567892'
+      contact_number: '+1234567892',
+      no_of_passengers: 3,
+      luggage_count: 4
     },
     flight_details: {
-      flight_number: 'SG123',
-      airline: 'SpiceJet',
-      departure_airport: 'DEL',
+      flight_no: 'BA123',
+      airline: 'British Airways',
+      departure_airport: 'LHR',
       arrival_airport: 'BOM',
-      scheduled_arrival: new Date('2024-01-15T18:00:00Z'),
-      actual_arrival: new Date('2024-01-15T17:55:00Z'),
-      status: 'landed',
+      departure_time: new Date(in20Hours.getTime() - (8 * 60 * 60 * 1000)),
+      arrival_time: in20Hours,
+      status: 'on_time',
+      delay_minutes: 0,
+      gate: 'C7',
       terminal: 'T2'
     },
     transfer_details: {
       pickup_location: 'Mumbai Airport T2',
       drop_location: 'ITC Maratha',
-      transfer_type: 'arrival',
-      status: 'assigned',
-      estimated_pickup_time: new Date('2024-01-15T18:30:00Z'),
+      event_place: 'ITC Grand Central',
+      transfer_status: 'pending',
+      estimated_pickup_time: new Date(in20Hours.getTime() + (30 * 60 * 1000)),
       actual_pickup_time: null,
-      estimated_drop_time: new Date('2024-01-15T19:30:00Z'),
-      actual_drop_time: null
+      estimated_drop_time: new Date(in20Hours.getTime() + (90 * 60 * 1000)),
+      actual_drop_time: null,
+      special_notes: 'Family with children, need larger vehicle'
     },
     vendor_details: {
       vendor_id: 'V001',
       vendor_name: 'Mumbai Transfers Ltd',
       contact_person: 'Raj Kumar',
-      phone: '+919876543210'
+      contact_number: '+919876543210',
+      email: 'contact@mumbaitransfers.com'
     },
-    assigned_driver_details: {
-      driver_id: 'D003',
-      driver_name: 'Raj Kumar',
-      phone: '+919876543214',
-      vehicle_type: 'Toyota Innova',
-      vehicle_number: 'MH03EF9012',
-      license_number: 'DL456789123'
-    },
+    assigned_driver_details: null,
     notifications: {
       sent: [
         {

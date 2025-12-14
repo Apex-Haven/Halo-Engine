@@ -22,12 +22,12 @@ check_port() {
 }
 
 # Check if ports are available
-if check_port 3000; then
-    echo "⚠️  Port 3000 is already in use. Backend might already be running."
+if check_port 707; then
+    echo "⚠️  Port 0707 is already in use. Backend might already be running."
 fi
 
-if check_port 3001; then
-    echo "⚠️  Port 3001 is already in use. Frontend might already be running."
+if check_port 7070; then
+    echo "⚠️  Port 7070 is already in use. Frontend might already be running."
 fi
 
 echo ""
@@ -35,7 +35,7 @@ echo "Starting services..."
 echo ""
 
 # Start backend in background
-echo "🔧 Starting Backend on http://localhost:3000..."
+echo "🔧 Starting Backend on http://localhost:0707..."
 cd "$(dirname "$0")"
 npm run dev &
 BACKEND_PID=$!
@@ -44,7 +44,7 @@ BACKEND_PID=$!
 sleep 3
 
 # Start frontend in background
-echo "🎨 Starting Frontend on http://localhost:3001..."
+echo "🎨 Starting Frontend on http://localhost:70070..."
 cd halo-ui
 npm run dev &
 FRONTEND_PID=$!
@@ -55,9 +55,9 @@ sleep 3
 echo ""
 echo "🎉 HALO is starting up!"
 echo ""
-echo "📊 Backend API: http://localhost:3000"
-echo "🎨 Frontend UI: http://localhost:3001"
-echo "🏥 Health Check: http://localhost:3000/health"
+echo "📊 Backend API: http://localhost:0707"
+echo "🎨 Frontend UI: http://localhost:70070"
+echo "🏥 Health Check: http://localhost:0707/api/health"
 echo ""
 echo "Press Ctrl+C to stop all services"
 echo ""
