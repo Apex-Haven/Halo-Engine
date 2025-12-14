@@ -1,220 +1,185 @@
-# 🚀 HALO Deployment Guide
+# HALO Engine Deployment Guide
 
-## 📋 Prerequisites
+Complete guide for deploying HALO backend to production using Render or Fly.io.
+
+## Overview
+
+- **Backend**: Render or Fly.io (free tier available for both)
+- **Database**: MongoDB Atlas (free tier available)
+
+## Prerequisites
 
 - GitHub account
-- Railway account (free tier)
-- Vercel account (free tier)
-- MongoDB Atlas account (free tier)
+- MongoDB Atlas account (free tier available)
+- Render or Fly.io account (free tier available)
 
-## 🗂️ Step 1: Create GitHub Organization & Repositories
+## Step 1: Prepare MongoDB Database
 
-### 1.1 Create GitHub Organization
-1. Go to [GitHub](https://github.com)
-2. Click "New organization"
-3. Choose "Free" plan
-4. Name: `Apex-Haven`
-5. Create organization
+1. Go to [MongoDB Atlas](https://www.mongodb.com/cloud/atlas)
+2. Create a free cluster
+3. Create a database user
+4. Whitelist IP addresses (use `0.0.0.0/0` for Render/Fly.io)
+5. Get your connection string: `mongodb+srv://username:password@cluster.mongodb.net/halo?retryWrites=true&w=majority`
 
-### 1.2 Create Repositories
-1. In your organization, create two repositories:
-   - `halo-backend` (for Node.js backend)
-   - `halo-frontend` (for React frontend)
+## Step 2: Deploy Backend to Render
 
-### 1.3 Push Code to GitHub
+### Option A: Render (Recommended for Simplicity)
+
+1. Go to [Render](https://render.com) and sign up with GitHub
+2. Click "New +" → "Web Service"
+3. Connect your GitHub repository (`Apex-Haven/Halo-Engine`)
+4. Configure:
+   - **Name**: `halo-backend`
+   - **Root Directory**: (leave empty, repo root is the engine)
+   - **Environment**: `Node`
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+   - **Plan**: Free (spins down after 15min inactivity)
+
+5. Add Environment Variables (see `env.example`):
+   ```bash
+   NODE_ENV=production
+   PORT=10000
+   MONGODB_URI=your-mongodb-connection-string
+   JWT_SECRET=your-jwt-secret-min-32-chars
+   JWT_REFRESH_SECRET=your-refresh-secret-min-32-chars
+   ALLOWED_ORIGINS=https://your-netlify-app.netlify.app
+   ```
+
+6. Deploy and copy your Render URL: `https://halo-backend.onrender.com`
+
+### Option B: Fly.io (Recommended for Always-On)
+
+1. Install Fly CLI: `curl -L https://fly.io/install.sh | sh`
+2. Login: `fly auth login`
+3. In `halo-engine` directory, initialize: `fly launch`
+4. Configure `fly.toml`:
+   ```toml
+   app = "halo-backend"
+   primary_region = "iad"
+   
+   [build]
+   
+   [http_service]
+     internal_port = 7007
+     force_https = true
+     auto_stop_machines = false
+     auto_start_machines = true
+     min_machines_running = 1
+   
+   [[vm]]
+     memory_mb = 512
+   ```
+
+5. Set secrets:
+   ```bash
+   fly secrets set MONGODB_URI=your-connection-string
+   fly secrets set JWT_SECRET=your-secret
+   fly secrets set JWT_REFRESH_SECRET=your-refresh-secret
+   fly secrets set ALLOWED_ORIGINS=https://your-netlify-app.netlify.app
+   ```
+
+6. Deploy: `fly deploy`
+7. Get URL: `https://halo-backend.fly.dev`
+
+## Step 3: Update CORS Settings
+
+1. After deploying frontend to Netlify, update `ALLOWED_ORIGINS` environment variable:
+   ```bash
+   ALLOWED_ORIGINS=https://your-app.netlify.app
+   ```
+2. Redeploy backend (Render auto-redeploys, Fly.io: `fly deploy`)
+
+## Step 4: Verify Deployment
+
+### Test Backend Health Check
 ```bash
-# Backend
-cd /Users/stalin/Workspace/Halo
-git init
-git add .
-git commit -m "Initial HALO backend commit"
-git branch -M main
-git remote add origin https://github.com/Apex-Haven/halo-backend.git
-git push -u origin main
-
-# Frontend
-cd /Users/stalin/Workspace/Halo/halo-ui
-git init
-git add .
-git commit -m "Initial HALO frontend commit"
-git branch -M main
-git remote add origin https://github.com/Apex-Haven/halo-frontend.git
-git push -u origin main
+curl https://your-backend-url.onrender.com/api/health
+# OR
+curl https://your-backend-url.fly.dev/api/health
 ```
 
-## 🗄️ Step 2: Setup MongoDB Atlas
-
-### 2.1 Create MongoDB Atlas Account
-1. Go to [MongoDB Atlas](https://www.mongodb.com/atlas)
-2. Sign up for free account
-3. Create new project: "HALO"
-
-### 2.2 Create Database Cluster
-1. Click "Build a Database"
-2. Choose "M0 Sandbox" (Free tier)
-3. Provider: AWS
-4. Region: Choose closest to your users
-5. Cluster name: "halo-cluster"
-6. Click "Create"
-
-### 2.3 Configure Database Access
-1. Go to "Database Access"
-2. Click "Add New Database User"
-3. Username: `halo-user`
-4. Password: Generate secure password
-5. Database User Privileges: "Read and write to any database"
-6. Click "Add User"
-
-### 2.4 Configure Network Access
-1. Go to "Network Access"
-2. Click "Add IP Address"
-3. Choose "Allow access from anywhere" (0.0.0.0/0)
-4. Click "Confirm"
-
-### 2.5 Get Connection String
-1. Go to "Database"
-2. Click "Connect" on your cluster
-3. Choose "Connect your application"
-4. Driver: Node.js
-5. Version: 4.1 or later
-6. Copy the connection string
-7. Replace `<password>` with your database user password
-
-## 🚂 Step 3: Deploy Backend to Railway
-
-### 3.1 Create Railway Account
-1. Go to [Railway](https://railway.app)
-2. Sign up with GitHub
-3. Authorize Railway to access your repositories
-
-### 3.2 Deploy Backend
-1. Click "New Project"
-2. Choose "Deploy from GitHub repo"
-3. Select `Apex-Haven/halo-backend`
-4. Railway will automatically detect Node.js and deploy
-
-### 3.3 Configure Environment Variables
-1. Go to your project dashboard
-2. Click on "Variables" tab
-3. Add the following variables:
-
-```bash
-NODE_ENV=production
-PORT=707
-MONGODB_URI=mongodb+srv://halo-user:YOUR_PASSWORD@halo-cluster.xxxxx.mongodb.net/halo?retryWrites=true&w=majority
-JWT_SECRET=your-super-secret-jwt-key-here-make-it-long-and-random
-ALLOWED_ORIGINS=https://your-frontend-domain.vercel.app
+Expected response:
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-01-01T00:00:00.000Z"
+}
 ```
 
-### 3.4 Get Railway URL
-1. After deployment, Railway will provide a URL like:
-   `https://halo-backend-production-xxxx.up.railway.app`
-2. Copy this URL - you'll need it for the frontend
+## Environment Variables Reference
 
-## ⚡ Step 4: Deploy Frontend to Vercel
+See `env.example` for complete list of environment variables.
 
-### 4.1 Create Vercel Account
-1. Go to [Vercel](https://vercel.com)
-2. Sign up with GitHub
-3. Authorize Vercel to access your repositories
+### Critical Variables
+- `MONGODB_URI` - MongoDB connection string (REQUIRED)
+- `JWT_SECRET` - JWT secret key, min 32 characters (REQUIRED)
+- `JWT_REFRESH_SECRET` - Refresh token secret, min 32 characters (REQUIRED)
+- `ALLOWED_ORIGINS` - Comma-separated list of allowed frontend URLs (REQUIRED)
 
-### 4.2 Deploy Frontend
-1. Click "New Project"
-2. Import `Apex-Haven/halo-frontend`
-3. Vercel will automatically detect Vite/React
-4. Click "Deploy"
+## Troubleshooting
 
-### 4.3 Configure Environment Variables
-1. Go to your project dashboard
-2. Click "Settings" → "Environment Variables"
-3. Add the following variable:
+### Backend Not Starting
+- Check environment variables are set correctly
+- Verify MongoDB connection string is valid
+- Check backend logs for specific errors
 
+### Health Check Fails
+- Verify backend is running
+- Check `/api/health` endpoint exists
+- Ensure PORT environment variable is set
+
+### CORS Errors
+- Verify `ALLOWED_ORIGINS` includes your exact Netlify URL (no trailing slash)
+- Check backend logs for CORS-related errors
+- Ensure backend is running and accessible
+
+## Hosting Platform Comparison
+
+### Backend: Render
+- **Free Tier**: 750 hours/month, spins down after 15min inactivity
+- **Pros**: Simple setup, automatic deployments
+- **Cons**: Cold starts after inactivity
+- **Good for**: Development/staging, low-traffic production
+
+### Backend: Fly.io
+- **Free Tier**: 3 shared VMs, 3GB storage
+- **Pros**: Always-on, no cold starts, global edge network
+- **Cons**: Slightly more complex setup
+- **Good for**: Production apps that need to stay online
+
+## Custom Domains
+
+### Render Custom Domain
+1. Go to Render dashboard → Your service → Settings → Custom Domains
+2. Add your domain
+3. Configure DNS records as shown
+
+### Fly.io Custom Domain
+1. Run: `fly certs add yourdomain.com`
+2. Configure DNS as shown in output
+3. Verify: `fly certs show yourdomain.com`
+
+## Continuous Deployment
+
+Both Render and Fly.io can automatically deploy on git push to main branch.
+
+For Fly.io:
 ```bash
-VITE_API_BASE_URL=https://halo-backend-production-xxxx.up.railway.app/api
+fly deploy  # Manual deployment
+# OR set up GitHub Actions for automatic deployment
 ```
 
-### 4.4 Redeploy
-1. After adding environment variables, click "Redeploy"
-2. Vercel will rebuild with the new environment variables
+## Support
 
-## 🔧 Step 5: Update CORS Settings
+- **Render**: [Documentation](https://render.com/docs) | [Community](https://community.render.com)
+- **Fly.io**: [Documentation](https://fly.io/docs) | [Community](https://community.fly.io)
 
-### 5.1 Update Backend CORS
-1. Go back to Railway
-2. Update the `ALLOWED_ORIGINS` variable:
-```bash
-ALLOWED_ORIGINS=https://your-vercel-domain.vercel.app
-```
+## Security Notes
 
-### 5.2 Redeploy Backend
-1. Railway will automatically redeploy when you update variables
-
-## ✅ Step 6: Test Production Deployment
-
-### 6.1 Test Backend
-1. Visit: `https://your-railway-url.up.railway.app/health`
-2. Should return: `{"status":"OK","timestamp":"..."}`
-
-### 6.2 Test Frontend
-1. Visit your Vercel URL
-2. Try logging in with test credentials:
-   - Admin: `admin@halo.com` / `admin123`
-   - Driver: `driver@halo.com` / `driver123`
-   - Customer: `customer@halo.com` / `customer123`
-
-### 6.3 Test API Connection
-1. Open browser developer tools
-2. Check Network tab for API calls
-3. Verify calls are going to Railway URL
-
-## 🎉 Step 7: Custom Domain (Optional)
-
-### 7.1 Backend Custom Domain
-1. In Railway, go to "Settings" → "Domains"
-2. Add your custom domain (e.g., `api.halo.apex.com`)
-3. Update DNS records as instructed
-
-### 7.2 Frontend Custom Domain
-1. In Vercel, go to "Settings" → "Domains"
-2. Add your custom domain (e.g., `halo.apex.com`)
-3. Update DNS records as instructed
-
-## 📊 Monitoring & Maintenance
-
-### Health Checks
-- Backend: `https://your-railway-url.up.railway.app/health`
-- Frontend: Your Vercel domain
-
-### Logs
-- Railway: Project dashboard → "Deployments" → View logs
-- Vercel: Project dashboard → "Functions" → View logs
-
-### Updates
-- Push changes to GitHub
-- Railway and Vercel will automatically redeploy
-
-## 🆘 Troubleshooting
-
-### Common Issues
-1. **CORS Errors**: Check `ALLOWED_ORIGINS` in Railway
-2. **Database Connection**: Verify MongoDB Atlas connection string
-3. **Environment Variables**: Ensure all required variables are set
-4. **Build Failures**: Check logs in Railway/Vercel dashboards
-
-### Support
-- Railway: [Railway Discord](https://discord.gg/railway)
-- Vercel: [Vercel Community](https://github.com/vercel/vercel/discussions)
-- MongoDB: [MongoDB Community](https://community.mongodb.com/)
-
-## 💰 Cost Breakdown
-
-| Service | Free Tier | Production Cost |
-|---------|-----------|-----------------|
-| Railway | $5/month credit | $5/month |
-| Vercel | Free forever | Free |
-| MongoDB Atlas | 512MB free | $9/month |
-| **Total** | **$0/month** | **$14/month** |
-
----
-
-🎉 **Congratulations! Your HALO application is now live in production!**
+1. Never commit `.env` files to git
+2. Use strong, unique secrets (min 32 characters)
+3. Keep MongoDB Atlas IP whitelist minimal
+4. Regularly rotate JWT secrets
+5. Monitor backend logs for suspicious activity
+6. Use HTTPS only (enforced by all platforms)
