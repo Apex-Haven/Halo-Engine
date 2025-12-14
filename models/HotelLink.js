@@ -28,11 +28,31 @@ const hotelLinkSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  address: {
+    type: String,
+    trim: true
+  },
   city: {
     type: String,
     uppercase: true,
     trim: true,
     index: true
+  },
+  country: {
+    type: String,
+    trim: true
+  },
+  coordinates: {
+    latitude: {
+      type: Number,
+      min: -90,
+      max: 90
+    },
+    longitude: {
+      type: Number,
+      min: -180,
+      max: 180
+    }
   },
   bookingUrls: {
     type: Map,
