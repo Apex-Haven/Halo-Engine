@@ -14,14 +14,12 @@ const hotelLinkSchema = new mongoose.Schema({
   cozyCozyId: {
     type: String,
     trim: true,
-    sparse: true,
-    index: true
+    sparse: true
   },
   xoteloId: {
     type: String,
     trim: true,
-    sparse: true,
-    index: true
+    sparse: true
   },
   hotelName: {
     type: String,

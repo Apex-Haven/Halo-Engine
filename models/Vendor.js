@@ -34,8 +34,7 @@ const vendorSchema = new mongoose.Schema({
       type: String,
       required: true,
       lowercase: true,
-      match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-      index: true
+      match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     },
     phone: {
       type: String,
