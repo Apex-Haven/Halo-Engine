@@ -98,6 +98,10 @@ const userSchema = new mongoose.Schema({
       default: 0
     }
   },
+  assignedClients: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   // Driver-specific data
   driverDetails: {
     licenseNumber: String,
