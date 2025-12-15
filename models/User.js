@@ -76,6 +76,15 @@ const userSchema = new mongoose.Schema({
     type: String,
     ref: 'Transfer'
   }],
+  assignedVendors: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  // Vendor-specific data
+  assignedClients: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   // Vendor-specific data
   vendorDetails: {
     companyName: String,
@@ -158,6 +167,8 @@ userSchema.index({ role: 1 });
 userSchema.index({ vendorId: 1 });
 userSchema.index({ driverId: 1 });
 userSchema.index({ isActive: 1 });
+userSchema.index({ 'assignedVendors': 1 });
+userSchema.index({ 'assignedClients': 1 });
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {
