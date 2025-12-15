@@ -81,11 +81,6 @@ const userSchema = new mongoose.Schema({
     ref: 'User'
   }],
   // Vendor-specific data
-  assignedClients: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-  // Vendor-specific data
   vendorDetails: {
     companyName: String,
     contactPerson: String,
