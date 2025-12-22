@@ -404,6 +404,25 @@ router.patch('/:id/performance', authenticate, authorize(['SUPER_ADMIN', 'ADMIN'
 });
 
 // Get vendor statistics (aggregated)
+// Get vendor transfers
+router.get('/:vendorId/transfers', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR']), async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const { limit = 10, page = 1, status, date_from, date_to } = req.query;
+    
+    const { getVendorTransfers } = require('../controllers/vendorController');
+    await getVendorTransfers(req, res);
+  } catch (error) {
+    console.error('Error fetching vendor transfers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch vendor transfers',
+      error: error.message
+    });
+  }
+});
+
+// Get vendor statistics (aggregated)
 router.get('/stats/overview', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER']), async (req, res) => {
   try {
     const VendorModel = getVendorModel();

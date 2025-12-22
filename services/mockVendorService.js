@@ -95,6 +95,84 @@ class MockVendor {
     }
     return count;
   }
+
+  static async aggregate(pipeline) {
+    // Basic aggregate support for common operations
+    let results = Array.from(MockVendorService.vendors.values());
+    
+    // Apply $match stages
+    for (const stage of pipeline) {
+      if (stage.$match) {
+        results = this._applyMatch(results, stage.$match);
+      }
+      if (stage.$group) {
+        return this._applyGroup(results, stage.$group);
+      }
+    }
+    
+    return results;
+  }
+
+  static _applyMatch(results, matchQuery) {
+    // Simplified match implementation
+    return results.filter(vendor => {
+      for (const [key, value] of Object.entries(matchQuery)) {
+        const nestedValue = this._getNestedValue(vendor, key);
+        if (nestedValue !== value) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  static _applyGroup(results, groupStage) {
+    // Basic group implementation
+    const grouped = {};
+    for (const vendor of results) {
+      const id = groupStage._id;
+      let groupKey;
+      
+      if (typeof id === 'string') {
+        groupKey = this._getNestedValue(vendor, id);
+      } else {
+        groupKey = 'all';
+      }
+      
+      if (!grouped[groupKey]) {
+        grouped[groupKey] = { _id: groupKey, count: 0, avgRating: 0, totalBookings: 0, completedBookings: 0, cancelledBookings: 0 };
+      }
+      
+      if (groupStage.count) {
+        grouped[groupKey].count += 1;
+      }
+      if (groupStage.avgRating) {
+        const rating = vendor.performance?.rating || 0;
+        grouped[groupKey].avgRating = (grouped[groupKey].avgRating * (grouped[groupKey].count - 1) + rating) / grouped[groupKey].count;
+      }
+      if (groupStage.totalBookings) {
+        grouped[groupKey].totalBookings += (vendor.performance?.totalBookings || 0);
+      }
+      if (groupStage.completedBookings) {
+        grouped[groupKey].completedBookings += (vendor.performance?.completedBookings || 0);
+      }
+      if (groupStage.cancelledBookings) {
+        grouped[groupKey].cancelledBookings += (vendor.performance?.cancelledBookings || 0);
+      }
+    }
+    
+    return Object.values(grouped);
+  }
+
+  static _getNestedValue(obj, path) {
+    const keys = path.split('.');
+    let value = obj;
+    for (const key of keys) {
+      if (value == null) return null;
+      value = value[key];
+    }
+    return value;
+  }
 }
 
 class MockVendorService {

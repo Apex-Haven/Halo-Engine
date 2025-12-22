@@ -239,17 +239,30 @@ router.get('/clients/:clientId/vendors', authenticate, async (req, res) => {
 router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const UserModel = getUserModel();
-    const user = await UserModel.findById(req.params.id)
-      .select('-password')
-      .populate('createdBy', 'username email profile')
-      .populate('assignedClients', 'username email profile')
-      .populate('assignedVendors', 'username email profile');
-
+    let user = await UserModel.findById(req.params.id);
+    
     if (!user) {
       return res.status(404).json({
         success: false,
         message: 'User not found'
       });
+    }
+    
+    // Apply select and populate if user is found
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1 && UserModel === User) {
+      // Real MongoDB - use chainable query
+      user = await UserModel.findById(req.params.id)
+        .select('-password')
+        .populate('createdBy', 'username email profile')
+        .populate('assignedClients', 'username email profile')
+        .populate('assignedVendors', 'username email profile');
+    } else {
+      // Mock data - apply select manually
+      if (user.select) {
+        user = user.select('-password');
+      }
+      // Mock populate would need to be implemented separately
     }
 
     res.json({

@@ -41,6 +41,10 @@ const authenticate = async (req, res, next) => {
     } else {
       // Mock data - find user directly
       user = await UserModel.findById(decoded.userId);
+      // If user found and it's a MockUser, apply select manually
+      if (user && user.select) {
+        user = user.select('-password');
+      }
     }
     
     if (!user || !user.isActive) {

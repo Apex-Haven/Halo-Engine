@@ -25,6 +25,25 @@ router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), asy
       query.createdBy = req.user._id;
     }
 
+    // Check connection state before querying
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState !== 1 && UserModel === User) {
+      // MongoDB not connected and trying to use real User model - fall back to mock
+      const { MockUser } = require('../services/mockUserService');
+      const MockUserModel = MockUser;
+      const drivers = await MockUserModel.find(query)
+        .select('-password')
+        .populate('createdBy', 'username email profile')
+        .populate('vendorId')
+        .sort({ createdAt: -1 });
+      
+      return res.json({
+        success: true,
+        data: drivers,
+        count: drivers.length
+      });
+    }
+
     const drivers = await UserModel.find(query)
       .select('-password')
       .populate('createdBy', 'username email profile')
