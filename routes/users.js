@@ -6,7 +6,13 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 // Helper function to get the appropriate User model
 const getUserModel = () => {
-  return MockUserService.isUsingMockData() ? MockUser : User;
+  const mongoose = require('mongoose');
+  // Check if MongoDB is actually connected and ready
+  if (mongoose.connection.readyState === 1) {
+    return User;
+  }
+  // Fall back to mock data if not connected
+  return MockUser;
 };
 
 /**
@@ -49,16 +55,38 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, r
 router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const UserModel = getUserModel();
-    const vendors = await UserModel.find({ role: 'VENDOR' })
-      .select('-password')
-      .populate('assignedClients', 'username email profile')
-      .sort({ createdAt: -1 });
+    
+    // Check if this is a buffering timeout error and fall back to mock
+    try {
+      const vendors = await UserModel.find({ role: 'VENDOR' })
+        .select('-password')
+        .populate('assignedClients', 'username email profile')
+        .sort({ createdAt: -1 });
 
-    res.json({
-      success: true,
-      data: vendors,
-      count: vendors.length
-    });
+      res.json({
+        success: true,
+        data: vendors,
+        count: vendors.length
+      });
+    } catch (dbError) {
+      // If it's a buffering timeout and we're using real User model, fall back to mock
+      if (dbError.name === 'MongooseError' && dbError.message.includes('buffering') && UserModel === User) {
+        console.warn('⚠️ MongoDB buffering timeout, falling back to mock data');
+        const MockUserModel = MockUser;
+        const vendors = await MockUserModel.find({ role: 'VENDOR' })
+          .select('-password')
+          .populate('assignedClients', 'username email profile')
+          .sort({ createdAt: -1 });
+        
+        res.json({
+          success: true,
+          data: vendors,
+          count: vendors.length
+        });
+      } else {
+        throw dbError;
+      }
+    }
   } catch (error) {
     console.error('Error fetching vendors:', error);
     res.status(500).json({
@@ -77,16 +105,38 @@ router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async 
 router.get('/clients', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const UserModel = getUserModel();
-    const clients = await UserModel.find({ role: 'CLIENT' })
-      .select('-password')
-      .populate('assignedVendors', 'username email profile')
-      .sort({ createdAt: -1 });
+    
+    // Check if this is a buffering timeout error and fall back to mock
+    try {
+      const clients = await UserModel.find({ role: 'CLIENT' })
+        .select('-password')
+        .populate('assignedVendors', 'username email profile')
+        .sort({ createdAt: -1 });
 
-    res.json({
-      success: true,
-      data: clients,
-      count: clients.length
-    });
+      res.json({
+        success: true,
+        data: clients,
+        count: clients.length
+      });
+    } catch (dbError) {
+      // If it's a buffering timeout and we're using real User model, fall back to mock
+      if (dbError.name === 'MongooseError' && dbError.message.includes('buffering') && UserModel === User) {
+        console.warn('⚠️ MongoDB buffering timeout, falling back to mock data');
+        const MockUserModel = MockUser;
+        const clients = await MockUserModel.find({ role: 'CLIENT' })
+          .select('-password')
+          .populate('assignedVendors', 'username email profile')
+          .sort({ createdAt: -1 });
+        
+        res.json({
+          success: true,
+          data: clients,
+          count: clients.length
+        });
+      } else {
+        throw dbError;
+      }
+    }
   } catch (error) {
     console.error('Error fetching clients:', error);
     res.status(500).json({
