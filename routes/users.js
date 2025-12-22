@@ -98,6 +98,56 @@ router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async 
 });
 
 /**
+ * @route   GET /api/users/customers
+ * @desc    Get all customers/clients (alias for /clients)
+ * @access  Private (Super Admin/Admin only)
+ */
+router.get('/customers', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+  try {
+    const UserModel = getUserModel();
+    
+    // Check if this is a buffering timeout error and fall back to mock
+    try {
+      const clients = await UserModel.find({ role: 'CLIENT' })
+        .select('-password')
+        .populate('assignedVendors', 'username email profile')
+        .sort({ createdAt: -1 });
+
+      res.json({
+        success: true,
+        data: clients,
+        count: clients.length
+      });
+    } catch (dbError) {
+      // If it's a buffering timeout and we're using real User model, fall back to mock
+      if (dbError.name === 'MongooseError' && dbError.message.includes('buffering') && UserModel === User) {
+        console.warn('⚠️ MongoDB buffering timeout, falling back to mock data');
+        const MockUserModel = MockUser;
+        const clients = await MockUserModel.find({ role: 'CLIENT' })
+          .select('-password')
+          .populate('assignedVendors', 'username email profile')
+          .sort({ createdAt: -1 });
+        
+        res.json({
+          success: true,
+          data: clients,
+          count: clients.length
+        });
+      } else {
+        throw dbError;
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching customers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch customers',
+      error: error.message
+    });
+  }
+});
+
+/**
  * @route   GET /api/users/clients
  * @desc    Get all clients
  * @access  Private (Super Admin/Admin only)

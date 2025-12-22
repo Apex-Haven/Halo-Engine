@@ -1,6 +1,17 @@
 const Transfer = require('../models/Transfer');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
+const mongoose = require('mongoose');
+
+// Get transfer model (real or mock)
+const getTransferModel = () => {
+  if (mongoose.connection.readyState === 1) {
+    return Transfer;
+  }
+  // Use mock transfer service
+  const { MockTransfer } = require('../services/mockDataService');
+  return MockTransfer;
+};
 
 // Get transfers by vendor
 const getVendorTransfers = async (req, res) => {
@@ -13,6 +24,8 @@ const getVendorTransfers = async (req, res) => {
       date_from,
       date_to
     } = req.query;
+
+    const TransferModel = getTransferModel();
 
     // Build filter
     const filter = { 'vendor_details.vendor_id': vendorId };
@@ -32,38 +45,50 @@ const getVendorTransfers = async (req, res) => {
     }
 
     // Execute query with pagination
-    const transfers = await Transfer.find(filter)
+    const transfers = await TransferModel.find(filter)
       .sort({ 'flight_details.arrival_time': 1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .exec();
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit))
+      .lean();
 
-    const total = await Transfer.countDocuments(filter);
+    const total = mongoose.connection.readyState === 1
+      ? await TransferModel.countDocuments(filter)
+      : transfers.length;
 
     // Get vendor statistics
-    const stats = await Transfer.aggregate([
-      { $match: { 'vendor_details.vendor_id': vendorId } },
-      {
-        $group: {
-          _id: '$transfer_details.transfer_status',
-          count: { $sum: 1 }
+    let vendorStats = {};
+    try {
+      const stats = await TransferModel.aggregate([
+        { $match: { 'vendor_details.vendor_id': vendorId } },
+        {
+          $group: {
+            _id: '$transfer_details.transfer_status',
+            count: { $sum: 1 }
+          }
         }
-      }
-    ]);
+      ]);
 
-    const vendorStats = stats.reduce((acc, stat) => {
-      acc[stat._id] = stat.count;
-      return acc;
-    }, {});
+      vendorStats = stats.reduce((acc, stat) => {
+        acc[stat._id] = stat.count;
+        return acc;
+      }, {});
+    } catch (aggError) {
+      // If aggregate fails, calculate stats from results
+      vendorStats = transfers.reduce((acc, transfer) => {
+        const status = transfer.transfer_details?.transfer_status || 'unknown';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {});
+    }
 
     res.json({
       success: true,
       data: transfers,
       pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
+        current: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit)),
         total,
-        limit
+        limit: parseInt(limit)
       },
       stats: vendorStats
     });
