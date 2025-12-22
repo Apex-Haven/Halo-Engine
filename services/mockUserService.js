@@ -488,4 +488,4 @@ class MockUserService {
   }
 }
 
-module.exports = { MockUser, MockQuery, MockUserService };
+module.exports = { MockUser, MockUserQuery, MockUserService };
