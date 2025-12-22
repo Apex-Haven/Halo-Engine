@@ -139,17 +139,21 @@ app.use(logPermissionDenial);
 // Logging middleware
 app.use(morgan('combined'));
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
+// Health check endpoint (both with and without /api prefix for cluster compatibility)
+const healthCheckHandler = (req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || 'development'
   });
-});
+};
 
-// API routes
+app.get('/api/health', healthCheckHandler);
+app.get('/health', healthCheckHandler);
+
+// API routes (with /api prefix - standard configuration)
+// These routes work when frontend calls: https://backend.com/api/transfers
 app.use('/api/auth', authRoutes);
 app.use('/api/transfers', transferRoutes);
 app.use('/api/tracking', trackingRoutes);
@@ -164,6 +168,26 @@ app.use('/api/drivers', driverRoutes);
 app.use('/api/flight-integration', flightIntegrationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/travel-advisory', travelAdvisoryRoutes);
+
+// API routes (without /api prefix - for cluster/reverse proxy compatibility)
+// This allows routes to work when:
+// 1. A reverse proxy/ingress strips the /api prefix before forwarding
+// 2. Frontend is configured to call routes without /api (e.g., https://backend.com/transfers)
+// 3. Cluster environment routes requests differently
+app.use('/auth', authRoutes);
+app.use('/transfers', transferRoutes);
+app.use('/tracking', trackingRoutes);
+app.use('/vendors', vendorRoutes);
+app.use('/flights', flightRoutes);
+app.use('/notifications', notificationRoutes);
+app.use('/ai', aiRoutes);
+app.use('/flight-tracking', flightTrackingRoutes);
+app.use('/users', userRoutes);
+app.use('/travelers', travelerRoutes);
+app.use('/drivers', driverRoutes);
+app.use('/flight-integration', flightIntegrationRoutes);
+app.use('/hotels', hotelRoutes);
+app.use('/travel-advisory', travelAdvisoryRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

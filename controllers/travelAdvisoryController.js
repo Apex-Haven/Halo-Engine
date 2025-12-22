@@ -246,6 +246,51 @@ const createOrUpdatePreferences = async (req, res) => {
 
       preferences = new ClientTravelPreferences(preferenceData);
       preferences = await preferences.save();
+      
+      // Auto-generate recommendations for new preferences
+      // Only generate if all required fields are present
+      if (preferences.country && preferences.checkInDate && preferences.checkOutDate && 
+          preferences.budgetMin !== undefined && preferences.budgetMax !== undefined) {
+        try {
+          console.log('🔄 Auto-generating recommendations for new preference:', preferences._id);
+          const result = await travelAdvisoryService.generateRecommendations(preferences);
+          
+          if (result.success && result.recommendations && result.recommendations.length > 0) {
+            // Save recommendations to preference
+            preferences.recommendations = result.recommendations.map(rec => {
+              const recData = {
+                relevanceScore: rec.relevanceScore || 0,
+                distanceFromConference: rec.distanceFromConference,
+                distanceFromTargetArea: rec.distanceFromTargetArea,
+                amenitiesMatch: rec.amenitiesMatch || 0,
+                priceMatch: rec.priceMatch || 0,
+                starRatingMatch: rec.starRatingMatch || false,
+                cozyCozyId: rec.cozyCozyId
+              };
+              
+              // Only set hotelId if it's a valid MongoDB ObjectId
+              if (rec.hotelId && require('mongoose').Types.ObjectId.isValid(rec.hotelId)) {
+                recData.hotelId = rec.hotelId;
+              } else {
+                // Store hotel data directly if not a valid ObjectId
+                recData.hotelData = rec.hotel || rec.hotelId;
+              }
+              
+              return recData;
+            });
+            
+            preferences.markRecommendationsGenerated();
+            await preferences.save();
+            console.log(`✅ Auto-generated ${preferences.recommendations.length} recommendations`);
+          } else {
+            console.warn('⚠️ No recommendations generated during auto-generation');
+          }
+        } catch (genError) {
+          // Don't fail the preference creation if recommendation generation fails
+          console.error('❌ Error auto-generating recommendations:', genError);
+          console.error('Preference created successfully, but recommendations will need to be generated manually');
+        }
+      }
     }
 
     // Populate client details

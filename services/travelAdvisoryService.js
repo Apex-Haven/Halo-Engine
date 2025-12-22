@@ -230,8 +230,17 @@ class TravelAdvisoryService {
       }
 
       // Filter by city if target areas specified
+      // Use regex for flexible matching (case-insensitive, partial match)
       if (preferences.targetAreas && preferences.targetAreas.length > 0) {
-        query.city = { $in: preferences.targetAreas.map(area => area.toUpperCase()) };
+        if (preferences.targetAreas.length === 1) {
+          // Single area - use regex directly
+          query.city = new RegExp(preferences.targetAreas[0].trim(), 'i');
+        } else {
+          // Multiple areas - use $or with regex
+          query.$or = preferences.targetAreas.map(area => ({
+            city: new RegExp(area.trim(), 'i')
+          }));
+        }
       }
 
       const hotels = await Hotel.find(query).limit(100).lean();
@@ -523,6 +532,38 @@ class TravelAdvisoryService {
   }
 
   /**
+   * Get approximate coordinates for a country/city
+   */
+  getApproximateCoordinates(country, city) {
+    // Common city/country coordinates mapping
+    const coordinatesMap = {
+      'mexico': { latitude: 19.4326, longitude: -99.1332 }, // Mexico City
+      'mexico city': { latitude: 19.4326, longitude: -99.1332 },
+      'india': { latitude: 28.6139, longitude: 77.2090 }, // New Delhi
+      'mumbai': { latitude: 19.0760, longitude: 72.8777 },
+      'delhi': { latitude: 28.6139, longitude: 77.2090 },
+      'bangalore': { latitude: 12.9716, longitude: 77.5946 },
+      'usa': { latitude: 40.7128, longitude: -74.0060 }, // New York
+      'united states': { latitude: 40.7128, longitude: -74.0060 },
+      'uk': { latitude: 51.5074, longitude: -0.1278 }, // London
+      'united kingdom': { latitude: 51.5074, longitude: -0.1278 },
+      'london': { latitude: 51.5074, longitude: -0.1278 },
+      'france': { latitude: 48.8566, longitude: 2.3522 }, // Paris
+      'paris': { latitude: 48.8566, longitude: 2.3522 },
+      'germany': { latitude: 52.5200, longitude: 13.4050 }, // Berlin
+      'berlin': { latitude: 52.5200, longitude: 13.4050 },
+      'dubai': { latitude: 25.2048, longitude: 55.2708 },
+      'uae': { latitude: 25.2048, longitude: 55.2708 },
+      'singapore': { latitude: 1.3521, longitude: 103.8198 },
+      'thailand': { latitude: 13.7563, longitude: 100.5018 }, // Bangkok
+      'bangkok': { latitude: 13.7563, longitude: 100.5018 }
+    };
+
+    const searchKey = (city || country || '').toLowerCase().trim();
+    return coordinatesMap[searchKey] || coordinatesMap[country?.toLowerCase()?.trim()] || { latitude: 19.4326, longitude: -99.1332 }; // Default to Mexico City
+  }
+
+  /**
    * Generate fallback mock hotels when no hotels are found
    */
   async generateFallbackHotels(preferences) {
@@ -533,6 +574,9 @@ class TravelAdvisoryService {
     const minPrice = preferences.budgetMin || 20000;
     const maxPrice = preferences.budgetMax || 30000;
     const budgetMid = (minPrice + maxPrice) / 2;
+    
+    // Get approximate coordinates for the location
+    const baseCoords = this.getApproximateCoordinates(preferences.country, searchCity);
 
     return [
       {
@@ -564,7 +608,10 @@ class TravelAdvisoryService {
         ],
         location: {
           address: `123 Main Street, ${searchCity}`,
-          coordinates: { latitude: 19.0760, longitude: 72.8777 }
+          coordinates: { 
+            latitude: baseCoords.latitude + (Math.random() - 0.5) * 0.1, 
+            longitude: baseCoords.longitude + (Math.random() - 0.5) * 0.1 
+          }
         },
         sources: [{
           platform: 'mock',
@@ -603,7 +650,10 @@ class TravelAdvisoryService {
         ],
         location: {
           address: `456 Business Road, ${searchCity}`,
-          coordinates: { latitude: 19.0522, longitude: 72.8780 }
+          coordinates: { 
+            latitude: baseCoords.latitude + (Math.random() - 0.5) * 0.1, 
+            longitude: baseCoords.longitude + (Math.random() - 0.5) * 0.1 
+          }
         },
         sources: [{
           platform: 'mock',
@@ -639,7 +689,10 @@ class TravelAdvisoryService {
         ],
         location: {
           address: `789 Comfort Lane, ${searchCity}`,
-          coordinates: { latitude: 19.0759, longitude: 72.8776 }
+          coordinates: { 
+            latitude: baseCoords.latitude + (Math.random() - 0.5) * 0.1, 
+            longitude: baseCoords.longitude + (Math.random() - 0.5) * 0.1 
+          }
         },
         sources: [{
           platform: 'mock',

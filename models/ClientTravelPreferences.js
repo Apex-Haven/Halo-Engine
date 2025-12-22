@@ -163,6 +163,14 @@ clientTravelPreferencesSchema.index({ clientId: 1, createdAt: -1 });
 clientTravelPreferencesSchema.index({ status: 1, country: 1 });
 clientTravelPreferencesSchema.index({ checkInDate: 1, checkOutDate: 1 });
 
+// Instance methods
+clientTravelPreferencesSchema.methods.markRecommendationsGenerated = function() {
+  if (this.recommendations && this.recommendations.length > 0) {
+    this.status = 'recommendations_generated';
+  }
+  return this;
+};
+
 const ClientTravelPreferences = mongoose.model('ClientTravelPreferences', clientTravelPreferencesSchema);
 
 module.exports = ClientTravelPreferences;
