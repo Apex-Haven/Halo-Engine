@@ -256,30 +256,381 @@ const mockTransfers = [
 let nextId = 123459;
 
 // Mock Transfer model for demo purposes
+// Chainable query class to mimic Mongoose query behavior
+class MockQuery {
+  constructor(results) {
+    this._results = results;
+    this._sortField = null;
+    this._sortOrder = 1;
+    this._limitValue = null;
+    this._skipValue = 0;
+    this._lean = false;
+  }
+
+  sort(sortObj) {
+    // Handle Mongoose sort format: { field: 1 } or { field: -1 } or "field" or "-field"
+    if (typeof sortObj === 'string') {
+      if (sortObj.startsWith('-')) {
+        this._sortField = sortObj.substring(1);
+        this._sortOrder = -1;
+      } else {
+        this._sortField = sortObj;
+        this._sortOrder = 1;
+      }
+    } else if (typeof sortObj === 'object') {
+      const keys = Object.keys(sortObj);
+      if (keys.length > 0) {
+        this._sortField = keys[0];
+        this._sortOrder = sortObj[keys[0]];
+      }
+    }
+    return this;
+  }
+
+  limit(n) {
+    this._limitValue = n;
+    return this;
+  }
+
+  skip(n) {
+    this._skipValue = n;
+    return this;
+  }
+
+  lean() {
+    this._lean = true;
+    return this;
+  }
+
+  async exec() {
+    return this._execute();
+  }
+
+  async _execute() {
+    let results = [...this._results];
+
+    // Apply sorting
+    if (this._sortField) {
+      results.sort((a, b) => {
+        const aVal = this._getNestedValue(a, this._sortField);
+        const bVal = this._getNestedValue(b, this._sortField);
+        
+        if (aVal === bVal) return 0;
+        if (aVal == null) return 1;
+        if (bVal == null) return -1;
+        
+        const comparison = aVal > bVal ? 1 : -1;
+        return comparison * this._sortOrder;
+      });
+    }
+
+    // Apply skip
+    if (this._skipValue > 0) {
+      results = results.slice(this._skipValue);
+    }
+
+    // Apply limit
+    if (this._limitValue !== null) {
+      results = results.slice(0, this._limitValue);
+    }
+
+    // Return as plain objects if lean, otherwise as MockTransfer instances
+    if (this._lean) {
+      return results.map(t => ({ ...t }));
+    }
+    return results.map(t => new MockTransfer(t));
+  }
+
+  _getNestedValue(obj, path) {
+    const keys = path.split('.');
+    let value = obj;
+    for (const key of keys) {
+      if (value == null) return null;
+      // Handle field name aliases (createdAt -> created_at, updatedAt -> updated_at)
+      if (key === 'createdAt' && value.created_at !== undefined) {
+        value = value.created_at;
+      } else if (key === 'updatedAt' && value.updated_at !== undefined) {
+        value = value.updated_at;
+      } else {
+        value = value[key];
+      }
+    }
+    return value;
+  }
+
+  // Make it thenable (Promise-like) for async/await
+  then(resolve, reject) {
+    return this._execute().then(resolve, reject);
+  }
+}
+
 class MockTransfer {
   constructor(data) {
     Object.assign(this, data);
   }
 
-  static async find(query = {}) {
+  static find(query = {}) {
     let results = [...mockTransfers];
     
-    // Simple query filtering
+    // Apply query filters
     if (query.status) {
-      results = results.filter(t => t.transfer_details.status === query.status);
+      results = results.filter(t => t.transfer_details?.transfer_status === query.status);
     }
     if (query.vendor_id) {
-      results = results.filter(t => t.vendor_details.vendor_id === query.vendor_id);
+      results = results.filter(t => t.vendor_details?.vendor_id === query.vendor_id);
     }
     if (query._id) {
       results = results.filter(t => t._id === query._id);
     }
+    if (query['transfer_details.transfer_status']) {
+      results = results.filter(t => t.transfer_details?.transfer_status === query['transfer_details.transfer_status']);
+    }
+    if (query['vendor_details.vendor_id']) {
+      results = results.filter(t => t.vendor_details?.vendor_id === query['vendor_details.vendor_id']);
+    }
+    if (query['assigned_driver_details.driver_id']) {
+      results = results.filter(t => t.assigned_driver_details?.driver_id === query['assigned_driver_details.driver_id']);
+    }
+    if (query['flight_details.flight_no']) {
+      results = results.filter(t => t.flight_details?.flight_no === query['flight_details.flight_no']);
+    }
+    if (query['flight_details.arrival_time']) {
+      const arrivalTimeFilter = query['flight_details.arrival_time'];
+      if (arrivalTimeFilter.$gte) {
+        const gteDate = new Date(arrivalTimeFilter.$gte);
+        results = results.filter(t => {
+          const arrivalTime = t.flight_details?.arrival_time;
+          return arrivalTime && new Date(arrivalTime) >= gteDate;
+        });
+      }
+      if (arrivalTimeFilter.$lte) {
+        const lteDate = new Date(arrivalTimeFilter.$lte);
+        results = results.filter(t => {
+          const arrivalTime = t.flight_details?.arrival_time;
+          return arrivalTime && new Date(arrivalTime) <= lteDate;
+        });
+      }
+    }
     
-    return results.map(t => new MockTransfer(t));
+    // Handle $or conditions
+    if (query.$or) {
+      const orResults = [];
+      for (const orCondition of query.$or) {
+        const orMatches = results.filter(t => {
+          return Object.keys(orCondition).some(key => {
+            const value = this._getNestedValue(t, key);
+            if (value instanceof RegExp) {
+              return value.test(String(this._getNestedValue(t, key)));
+            }
+            return value === orCondition[key];
+          });
+        });
+        orResults.push(...orMatches);
+      }
+      results = [...new Set(orResults.map(t => t._id))].map(id => 
+        results.find(t => t._id === id)
+      );
+    }
+    
+    // Handle $and conditions
+    if (query.$and) {
+      for (const andCondition of query.$and) {
+        if (andCondition.$or) {
+          const orResults = [];
+          for (const orCondition of andCondition.$or) {
+            const orMatches = results.filter(t => {
+              return Object.keys(orCondition).some(key => {
+                const value = this._getNestedValue(t, key);
+                if (value instanceof RegExp) {
+                  return value.test(String(this._getNestedValue(t, key)));
+                }
+                return value === orCondition[key];
+              });
+            });
+            orResults.push(...orMatches);
+          }
+          results = [...new Set(orResults.map(t => t._id))].map(id => 
+            results.find(t => t._id === id)
+          );
+        }
+      }
+    }
+    
+    // Return chainable query object
+    return new MockQuery(results);
+  }
+
+  static _getNestedValue(obj, path) {
+    const keys = path.split('.');
+    let value = obj;
+    for (const key of keys) {
+      if (value == null) return null;
+      // Handle field name aliases (createdAt -> created_at, updatedAt -> updated_at)
+      if (key === 'createdAt' && value.created_at !== undefined) {
+        value = value.created_at;
+      } else if (key === 'updatedAt' && value.updated_at !== undefined) {
+        value = value.updated_at;
+      } else {
+        value = value[key];
+      }
+    }
+    return value;
+  }
+
+  static async countDocuments(query = {}) {
+    // Use the same filtering logic as find()
+    let results = [...mockTransfers];
+    
+    // Apply query filters (same logic as find)
+    if (query.status) {
+      results = results.filter(t => t.transfer_details?.transfer_status === query.status);
+    }
+    if (query.vendor_id) {
+      results = results.filter(t => t.vendor_details?.vendor_id === query.vendor_id);
+    }
+    if (query._id) {
+      results = results.filter(t => t._id === query._id);
+    }
+    if (query['transfer_details.transfer_status']) {
+      results = results.filter(t => t.transfer_details?.transfer_status === query['transfer_details.transfer_status']);
+    }
+    if (query['vendor_details.vendor_id']) {
+      results = results.filter(t => t.vendor_details?.vendor_id === query['vendor_details.vendor_id']);
+    }
+    if (query['assigned_driver_details.driver_id']) {
+      results = results.filter(t => t.assigned_driver_details?.driver_id === query['assigned_driver_details.driver_id']);
+    }
+    if (query['flight_details.flight_no']) {
+      results = results.filter(t => t.flight_details?.flight_no === query['flight_details.flight_no']);
+    }
+    if (query['flight_details.arrival_time']) {
+      const arrivalTimeFilter = query['flight_details.arrival_time'];
+      if (arrivalTimeFilter.$gte) {
+        const gteDate = new Date(arrivalTimeFilter.$gte);
+        results = results.filter(t => {
+          const arrivalTime = t.flight_details?.arrival_time;
+          return arrivalTime && new Date(arrivalTime) >= gteDate;
+        });
+      }
+      if (arrivalTimeFilter.$lte) {
+        const lteDate = new Date(arrivalTimeFilter.$lte);
+        results = results.filter(t => {
+          const arrivalTime = t.flight_details?.arrival_time;
+          return arrivalTime && new Date(arrivalTime) <= lteDate;
+        });
+      }
+    }
+    
+    // Handle $or conditions
+    if (query.$or) {
+      const orResults = [];
+      for (const orCondition of query.$or) {
+        const orMatches = results.filter(t => {
+          return Object.keys(orCondition).some(key => {
+            const value = this._getNestedValue(t, key);
+            if (value instanceof RegExp) {
+              return value.test(String(this._getNestedValue(t, key)));
+            }
+            return value === orCondition[key];
+          });
+        });
+        orResults.push(...orMatches);
+      }
+      results = [...new Set(orResults.map(t => t._id))].map(id => 
+        results.find(t => t._id === id)
+      );
+    }
+    
+    // Handle $and conditions
+    if (query.$and) {
+      for (const andCondition of query.$and) {
+        if (andCondition.$or) {
+          const orResults = [];
+          for (const orCondition of andCondition.$or) {
+            const orMatches = results.filter(t => {
+              return Object.keys(orCondition).some(key => {
+                const value = this._getNestedValue(t, key);
+                if (value instanceof RegExp) {
+                  return value.test(String(this._getNestedValue(t, key)));
+                }
+                return value === orCondition[key];
+              });
+            });
+            orResults.push(...orMatches);
+          }
+          results = [...new Set(orResults.map(t => t._id))].map(id => 
+            results.find(t => t._id === id)
+          );
+        }
+      }
+    }
+    
+    return results.length;
+  }
+
+  static async aggregate(pipeline) {
+    // Basic aggregate support for common operations
+    let results = [...mockTransfers];
+    
+    // Apply $match stages
+    for (const stage of pipeline) {
+      if (stage.$match) {
+        results = this._applyMatch(results, stage.$match);
+      }
+      if (stage.$group) {
+        return this._applyGroup(results, stage.$group);
+      }
+    }
+    
+    return results;
+  }
+
+  static _applyMatch(results, matchQuery) {
+    // Simplified match implementation
+    return results.filter(t => {
+      for (const [key, value] of Object.entries(matchQuery)) {
+        const nestedValue = this._getNestedValue(t, key);
+        if (nestedValue !== value) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  static _applyGroup(results, groupStage) {
+    // Basic group implementation
+    const grouped = {};
+    for (const transfer of results) {
+      const id = groupStage._id;
+      let groupKey;
+      
+      if (typeof id === 'string') {
+        groupKey = this._getNestedValue(transfer, id);
+      } else {
+        groupKey = 'all';
+      }
+      
+      if (!grouped[groupKey]) {
+        grouped[groupKey] = { _id: groupKey, count: 0 };
+      }
+      
+      if (groupStage.count) {
+        grouped[groupKey].count += 1;
+      }
+    }
+    
+    return Object.values(grouped);
   }
 
   static async findById(id) {
-    const transfer = mockTransfers.find(t => t._id === id);
+    // Handle both string and ObjectId-like formats
+    const transfer = mockTransfers.find(t => {
+      if (typeof id === 'string') {
+        return t._id === id || t._id === id.toUpperCase();
+      }
+      return t._id === id;
+    });
     return transfer ? new MockTransfer(transfer) : null;
   }
 
