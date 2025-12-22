@@ -151,17 +151,40 @@ class MockUser {
     return queryProxy;
   }
 
-  static async find(query = {}) {
-    const results = [];
+  static find(query = {}) {
+    let results = [];
     for (const user of MockUserService.users.values()) {
       let matches = true;
       
-      if (query.role && user.role !== query.role) matches = false;
+      // Handle role query (single value or $in array)
+      if (query.role) {
+        if (query.role.$in) {
+          matches = query.role.$in.includes(user.role);
+        } else if (user.role !== query.role) {
+          matches = false;
+        }
+      }
+      
       if (query.isActive !== undefined && user.isActive !== query.isActive) matches = false;
+      if (query._id && user._id !== query._id) matches = false;
+      if (query.email && user.email !== query.email) matches = false;
+      if (query.username && user.username !== query.username) matches = false;
+      
+      // Handle $or queries
+      if (query.$or) {
+        matches = query.$or.some(condition => {
+          if (condition.email && user.email === condition.email) return true;
+          if (condition.username && user.username === condition.username) return true;
+          if (condition._id && user._id === condition._id) return true;
+          return false;
+        });
+      }
       
       if (matches) results.push(user);
     }
-    return results;
+    
+    // Return chainable query object
+    return new MockUserQuery(results);
   }
 
   static async findByIdAndUpdate(id, updateData, options = {}) {
@@ -200,47 +223,194 @@ class MockUser {
   }
 }
 
-// Mock Query class to simulate Mongoose's method chaining
-class MockQuery {
-  constructor(data) {
-    this.data = data;
-    this.selectFields = null;
+// Chainable query class for MockUser to mimic Mongoose query behavior
+class MockUserQuery {
+  constructor(results) {
+    this._results = results;
+    this._selectFields = null;
+    this._populatePaths = [];
+    this._sortField = null;
+    this._sortOrder = 1;
+    this._limitValue = null;
+    this._skipValue = 0;
+    this._lean = false;
   }
 
   select(fields) {
-    this.selectFields = fields;
+    this._selectFields = fields;
+    return this;
+  }
+
+  populate(path, select) {
+    // Handle both string and object syntax
+    if (typeof path === 'string') {
+      this._populatePaths.push({ path, select });
+    } else if (typeof path === 'object') {
+      // Object syntax: { path: 'field', select: 'fields' }
+      this._populatePaths.push({ path: path.path, select: path.select });
+    }
+    return this;
+  }
+
+  sort(sortObj) {
+    // Handle Mongoose sort format: { field: 1 } or { field: -1 } or "field" or "-field"
+    if (typeof sortObj === 'string') {
+      if (sortObj.startsWith('-')) {
+        this._sortField = sortObj.substring(1);
+        this._sortOrder = -1;
+      } else {
+        this._sortField = sortObj;
+        this._sortOrder = 1;
+      }
+    } else if (typeof sortObj === 'object') {
+      const keys = Object.keys(sortObj);
+      if (keys.length > 0) {
+        this._sortField = keys[0];
+        this._sortOrder = sortObj[keys[0]];
+      }
+    }
+    return this;
+  }
+
+  limit(n) {
+    this._limitValue = n;
+    return this;
+  }
+
+  skip(n) {
+    this._skipValue = n;
+    return this;
+  }
+
+  lean() {
+    this._lean = true;
     return this;
   }
 
   async exec() {
-    if (!this.data) return null;
-    
-    if (this.selectFields) {
-      // Simulate field selection
-      const selectedData = { ...this.data };
-      const fields = this.selectFields.replace(/\s/g, '').split(' ');
-      
-      for (const field of fields) {
-        if (field.startsWith('-')) {
-          // Exclude field
-          const fieldName = field.substring(1);
-          delete selectedData[fieldName];
-        }
-        // Note: + prefix means include field (which is default behavior)
-        // So we don't need special handling for it
-      }
-      
-      return selectedData;
+    return this._execute();
+  }
+
+  async _execute() {
+    let results = [...this._results];
+
+    // Apply sorting
+    if (this._sortField) {
+      results.sort((a, b) => {
+        const aVal = this._getNestedValue(a, this._sortField);
+        const bVal = this._getNestedValue(b, this._sortField);
+        
+        if (aVal === bVal) return 0;
+        if (aVal == null) return 1;
+        if (bVal == null) return -1;
+        
+        const comparison = aVal > bVal ? 1 : -1;
+        return comparison * this._sortOrder;
+      });
     }
-    
-    return this.data;
+
+    // Apply skip
+    if (this._skipValue > 0) {
+      results = results.slice(this._skipValue);
+    }
+
+    // Apply limit
+    if (this._limitValue !== null) {
+      results = results.slice(0, this._limitValue);
+    }
+
+    // Apply populate - resolve ObjectId references
+    for (const result of results) {
+      for (const populate of this._populatePaths) {
+        const path = populate.path;
+        const select = populate.select;
+        
+        if (result[path]) {
+          if (Array.isArray(result[path])) {
+            // Populate array of references
+            result[path] = result[path].map(refId => {
+              const refUser = MockUserService.users.get(refId.toString());
+              if (!refUser) return null;
+              
+              // Apply select if specified
+              if (select) {
+                const selectedData = { ...refUser };
+                const fields = select.replace(/\s/g, '').split(' ');
+                for (const field of fields) {
+                  if (field.startsWith('-')) {
+                    const fieldName = field.substring(1);
+                    delete selectedData[fieldName];
+                  }
+                }
+                return selectedData;
+              }
+              return refUser;
+            }).filter(Boolean);
+          } else {
+            // Populate single reference
+            const refId = result[path];
+            const refUser = MockUserService.users.get(refId.toString());
+            if (refUser) {
+              // Apply select if specified
+              if (select) {
+                const selectedData = { ...refUser };
+                const fields = select.replace(/\s/g, '').split(' ');
+                for (const field of fields) {
+                  if (field.startsWith('-')) {
+                    const fieldName = field.substring(1);
+                    delete selectedData[fieldName];
+                  }
+                }
+                result[path] = selectedData;
+              } else {
+                result[path] = refUser;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Apply select
+    if (this._selectFields) {
+      results = results.map(user => {
+        const selectedData = { ...user };
+        const fields = this._selectFields.replace(/\s/g, '').split(' ');
+        
+        for (const field of fields) {
+          if (field.startsWith('-')) {
+            // Exclude field
+            const fieldName = field.substring(1);
+            delete selectedData[fieldName];
+          }
+        }
+        
+        return selectedData;
+      });
+    }
+
+    // Return as plain objects if lean, otherwise as MockUser instances
+    if (this._lean) {
+      return results.map(u => ({ ...u }));
+    }
+    return results;
+  }
+
+  _getNestedValue(obj, path) {
+    const keys = path.split('.');
+    let value = obj;
+    for (const key of keys) {
+      if (value == null) return null;
+      value = value[key];
+    }
+    return value;
+  }
+
+  // Make it thenable (Promise-like) for async/await
+  then(resolve, reject) {
+    return this._execute().then(resolve, reject);
   }
 }
-
-// Add select method to MockUser static methods
-MockUser.select = function(fields) {
-  return new MockQuery(this);
-};
 
 class MockUserService {
   static users = new Map();
