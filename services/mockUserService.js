@@ -83,7 +83,46 @@ class MockUser {
 
   static findById(id) {
     const user = MockUserService.users.get(id);
-    return user || null;
+    if (!user) return null;
+    
+    // Return a proxy that supports method chaining like Mongoose
+    return new Proxy(user, {
+      get(target, prop) {
+        if (prop === 'select') {
+          return (fields) => {
+            if (!fields) return target;
+            
+            const selectedData = { ...target };
+            const fieldList = fields.replace(/\s/g, '').split(' ');
+            
+            for (const field of fieldList) {
+              if (field.startsWith('-')) {
+                // Exclude field
+                const fieldName = field.substring(1);
+                delete selectedData[fieldName];
+              } else if (field.startsWith('+')) {
+                // Include field (already included by default)
+                // No action needed
+              }
+            }
+            
+            // Return a proxy that also supports populate
+            return new Proxy(selectedData, {
+              get(obj, propName) {
+                if (propName === 'populate') {
+                  return () => obj; // Mock populate - just return the object
+                }
+                return obj[propName];
+              }
+            });
+          };
+        }
+        if (prop === 'populate') {
+          return () => target; // Mock populate - just return the object
+        }
+        return target[prop];
+      }
+    });
   }
 
   static async findOne(query) {
