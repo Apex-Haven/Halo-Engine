@@ -119,6 +119,9 @@ const createOrUpdatePreferences = async (req, res) => {
       */
     }
 
+    // Extract name from request body
+    const name = req.body.name || req.body.preferenceName || null;
+
     let preferences;
 
     if (existingPreferences) {
@@ -173,6 +176,9 @@ const createOrUpdatePreferences = async (req, res) => {
       }
 
       // Update existing preferences
+      if (name && name.trim()) {
+        existingPreferences.name = name.trim();
+      }
       existingPreferences.country = country.trim();
       existingPreferences.targetAreas = Array.isArray(targetAreas) ? targetAreas.filter(a => a && a.trim()) : [];
       existingPreferences.checkInDate = checkInDateObj;
@@ -226,6 +232,7 @@ const createOrUpdatePreferences = async (req, res) => {
       }
 
       const preferenceData = {
+        name: name && name.trim() ? name.trim() : undefined, // Let model auto-generate if not provided
         clientId,
         country: country.trim(),
         targetAreas: Array.isArray(targetAreas) ? targetAreas.filter(a => a && a.trim()) : [],
