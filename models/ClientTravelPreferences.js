@@ -164,10 +164,21 @@ const clientTravelPreferencesSchema = new mongoose.Schema({
   collection: 'clienttravelpreferences'
 });
 
+// Pre-save hook to auto-generate name if not provided
+clientTravelPreferencesSchema.pre('save', function(next) {
+  if (!this.name || !this.name.trim()) {
+    const country = this.country || 'Travel';
+    const date = this.checkInDate ? new Date(this.checkInDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : new Date().toLocaleDateString();
+    this.name = `${country} - ${date}`;
+  }
+  next();
+});
+
 // Indexes
 clientTravelPreferencesSchema.index({ clientId: 1, createdAt: -1 });
 clientTravelPreferencesSchema.index({ status: 1, country: 1 });
 clientTravelPreferencesSchema.index({ checkInDate: 1, checkOutDate: 1 });
+clientTravelPreferencesSchema.index({ name: 1 }); // Index for search
 
 // Instance methods
 clientTravelPreferencesSchema.methods.markRecommendationsGenerated = function() {
