@@ -84,12 +84,26 @@ async function fixAdminPassword() {
 
       // Reset password
       console.log('🔄 Resetting password to "admin123"...');
+      // Mark password as modified to ensure pre-save hook runs
       admin.password = 'admin123'; // Will be hashed by pre-save hook
+      admin.markModified('password'); // Explicitly mark as modified
       admin.isActive = true;
       admin.loginAttempts = 0;
       admin.lockUntil = undefined;
       
       await admin.save();
+      
+      // Verify password was hashed
+      if (admin.password === 'admin123') {
+        console.log('⚠️  WARNING: Password was not hashed! Trying direct hash...');
+        const bcrypt = require('bcryptjs');
+        const salt = await bcrypt.genSalt(12);
+        admin.password = await bcrypt.hash('admin123', salt);
+        await admin.save();
+        console.log('✅ Password manually hashed and saved');
+      } else {
+        console.log('✅ Password hashed successfully (length: ' + admin.password.length + ')');
+      }
       
       console.log('✅ Password reset successfully!');
       console.log('\n📋 Updated Login Credentials:');
