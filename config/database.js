@@ -4,8 +4,18 @@ const connectDB = async () => {
   // Check if MongoDB URI is configured
   if (!process.env.MONGODB_URI) {
     console.error('❌ MONGODB_URI not found in environment variables.');
-    console.error('❌ MongoDB connection is required. Please set MONGODB_URI in your .env file.');
+    console.error('❌ MongoDB connection is required. Please set MONGODB_URI in your environment variables.');
     console.error('📝 Example: MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/halo?retryWrites=true&w=majority');
+    console.error('📝 For Render.com: Set MONGODB_URI in your service environment variables');
+    process.exit(1);
+  }
+
+  // Check if MONGODB_URI is pointing to localhost (won't work in production/cluster)
+  if (process.env.MONGODB_URI.includes('localhost') || process.env.MONGODB_URI.includes('127.0.0.1')) {
+    console.error('❌ MONGODB_URI is set to localhost, which will not work in a cluster/production environment.');
+    console.error('❌ Please set MONGODB_URI to a remote MongoDB instance (e.g., MongoDB Atlas).');
+    console.error('📝 Example: MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/halo?retryWrites=true&w=majority');
+    console.error('📝 Current MONGODB_URI:', process.env.MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@')); // Hide credentials
     process.exit(1);
   }
 
