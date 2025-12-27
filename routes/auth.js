@@ -131,8 +131,13 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
-    // Find user by email
-    const user = await User.findOne({ email }).select('+password');
+    // Normalize email (lowercase and trim)
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Find user by email (case-insensitive)
+    const user = await User.findOne({ 
+      email: normalizedEmail 
+    }).select('+password');
     
     if (!user) {
       return res.status(401).json({
