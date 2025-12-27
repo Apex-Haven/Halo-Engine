@@ -1,5 +1,19 @@
 # Fix MongoDB URI in Render.com
 
+## Understanding MongoDB Setup
+
+### Local Development
+- **MongoDB Compass** is a GUI tool - it connects to MongoDB, but it's not the database itself
+- For local development, you can use:
+  - **Local MongoDB server** (installed on your machine): `mongodb://localhost:27017/halo`
+  - **MongoDB Atlas** (cloud): `mongodb+srv://username:password@cluster.mongodb.net/halo`
+- MongoDB Compass can connect to both local and Atlas databases
+
+### Production/Cluster (Render.com)
+- **MUST use MongoDB Atlas** (from https://www.mongodb.com/cloud/atlas)
+- Render.com servers cannot access your localhost MongoDB
+- You need a cloud-hosted database accessible from the internet
+
 ## Quick Fix Steps
 
 Your deployment is failing because `MONGODB_URI` is set to `mongodb://localhost:27017/halo`, which won't work in a production environment.
