@@ -45,6 +45,27 @@ const connectDB = async () => {
   } catch (error) {
     console.error('❌ Database connection failed:', error.message);
     console.error('❌ MongoDB connection is required. Please check your MONGODB_URI and ensure MongoDB is accessible.');
+    
+    // Provide helpful error messages based on error type
+    if (error.message.includes('ECONNREFUSED') || error.message.includes('localhost') || error.message.includes('127.0.0.1')) {
+      console.error('');
+      console.error('⚠️  Connection refused to localhost MongoDB.');
+      console.error('⚠️  This usually means:');
+      console.error('   1. MONGODB_URI is set to localhost (mongodb://localhost:27017/...)');
+      console.error('   2. MONGODB_URI is not set and defaulting to localhost');
+      console.error('   3. For production/cluster deployment, you MUST use a remote MongoDB (e.g., MongoDB Atlas)');
+      console.error('');
+      console.error('📝 To fix:');
+      console.error('   1. Get a MongoDB Atlas connection string (or use another remote MongoDB service)');
+      console.error('   2. Set MONGODB_URI in your cluster environment variables');
+      console.error('   3. Format: mongodb+srv://username:password@cluster.mongodb.net/halo?retryWrites=true&w=majority');
+      console.error('');
+      if (process.env.MONGODB_URI) {
+        const maskedUri = process.env.MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@');
+        console.error('   Current MONGODB_URI:', maskedUri);
+      }
+    }
+    
     process.exit(1);
   }
 };
