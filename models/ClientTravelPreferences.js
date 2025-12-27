@@ -47,11 +47,7 @@ const clientTravelPreferencesSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    maxlength: 200,
-    default: function() {
-      // Auto-generate name if not provided
-      return `${this.country || 'Travel'} - ${new Date(this.checkInDate || Date.now()).toLocaleDateString()}`;
-    }
+    maxlength: 200
   },
   clientId: {
     type: mongoose.Schema.Types.ObjectId,
