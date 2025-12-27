@@ -1,6 +1,5 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { MockHotelService } = require('./mockHotelService');
 
 class HotelSearchService {
   constructor() {
@@ -48,11 +47,10 @@ class HotelSearchService {
       };
 
       // Search from multiple sources
-      const [makemytripHotels, yatraHotels, cleartripHotels, mockHotels] = await Promise.allSettled([
+      const [makemytripHotels, yatraHotels, cleartripHotels] = await Promise.allSettled([
         this.searchMakeMyTrip(city, filters),
         this.searchYatra(city, filters),
-        this.searchCleartrip(city, filters),
-        this.searchMockHotels(city, filters)
+        this.searchCleartrip(city, filters)
       ]);
 
       // Process results
@@ -73,14 +71,6 @@ class HotelSearchService {
         results.sources.push('cleartrip');
       }
 
-      // Add mock hotels as fallback
-      if (mockHotels.status === 'fulfilled' && mockHotels.value) {
-        console.log(`✅ Mock hotels status: ${mockHotels.status}, count: ${mockHotels.value?.length || 0}`);
-        allHotels.push(...mockHotels.value);
-        results.sources.push('mock');
-      } else {
-        console.log(`❌ Mock hotels failed: ${mockHotels.status}, reason: ${mockHotels.reason?.message || 'unknown'}`);
-      }
 
       console.log(`🔍 Total hotels collected from all sources: ${allHotels.length}`);
 
@@ -132,13 +122,13 @@ class HotelSearchService {
       return results;
     } catch (error) {
       console.error('Hotel search error:', error.message);
-      // Return mock data as fallback
-      return this.searchMockHotels(city, filters).then(mockHotels => ({
+      // Return empty results on error
+      return {
         city: city,
-        totalResults: mockHotels.length,
-        sources: ['mock'],
-        hotels: mockHotels
-      }));
+        totalResults: 0,
+        sources: [],
+        hotels: []
+      };
     }
   }
 

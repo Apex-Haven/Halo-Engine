@@ -1,20 +1,6 @@
 const Transfer = require('../models/Transfer');
 const mongoose = require('mongoose');
-const { mockTransfers } = require('../services/mockDataService');
 
-// Check if we're using mock data - check actual MongoDB connection status
-const isUsingMockData = () => {
-  // Use mock data only if MongoDB is not connected
-  return mongoose.connection.readyState !== 1; // 1 = connected
-};
-
-// Get the appropriate Transfer model
-const getTransferModel = () => {
-  if (isUsingMockData()) {
-    return null; // Will use mock data
-  }
-  return Transfer;
-};
 
 // Get transfer by ID for tracking
 const getTransferForTracking = async (req, res) => {
@@ -24,96 +10,78 @@ const getTransferForTracking = async (req, res) => {
     // Normalize the ID to uppercase (APX IDs are uppercase)
     const normalizedId = id.toUpperCase();
     
-    let transfer;
+    // Use database - search by _id (which is the APX ID like APX123456)
+    // Try exact match first
+    let transfer = await Transfer.findById(normalizedId);
+    console.log(`🔍 First attempt (findById): ${transfer ? '✅ Found' : '❌ Not found'}`);
     
-    if (isUsingMockData()) {
-      // Use mock data
-      transfer = mockTransfers.find(t => t._id === normalizedId || t._id === id);
+    // If not found, try searching without case sensitivity
+    if (!transfer) {
+      try {
+        // MongoDB string fields are case-sensitive, but let's try a case-insensitive search
+        const allTransfers = await Transfer.find({}).select('_id').limit(100).lean();
+        console.log(`📋 Found ${allTransfers.length} transfers in database`);
+        
+        if (allTransfers.length > 0) {
+          console.log(`🔎 Sample IDs:`, allTransfers.slice(0, 10).map(t => t._id).join(', '));
+          
+          // Try to find a case-insensitive match
+          const matched = allTransfers.find(t => 
+            t._id.toUpperCase() === normalizedId || 
+            t._id === normalizedId ||
+            t._id.toLowerCase() === normalizedId.toLowerCase()
+          );
+          
+          if (matched) {
+            console.log(`✅ Found case-insensitive match: ${matched._id}`);
+            transfer = await Transfer.findById(matched._id);
+          }
+        }
+      } catch (searchError) {
+        console.error('Search error:', searchError);
+      }
+    }
+    
+    // If still not found, try to find by any variation of the ID
+    if (!transfer) {
+      // Remove leading zeros or try different formats
+      const digits = normalizedId.replace(/^APX/i, '');
+      if (digits) {
+        // Try with leading zeros
+        const paddedDigits = digits.padStart(6, '0');
+        const paddedId = `APX${paddedDigits}`;
+        console.log(`🔍 Trying padded version: ${paddedId}`);
+        transfer = await Transfer.findById(paddedId);
+        
+        // Also try without padding (if original had padding)
+        if (!transfer && digits.length === 6) {
+          const unpaddedDigits = digits.replace(/^0+/, '');
+          if (unpaddedDigits !== digits) {
+            const unpaddedId = `APX${unpaddedDigits}`;
+            console.log(`🔍 Trying unpadded version: ${unpaddedId}`);
+            transfer = await Transfer.findById(unpaddedId);
+          }
+        }
+      }
+    }
+    
+    // Debug: Log what we found
+    if (transfer) {
+      console.log(`✅ Found transfer: ${transfer._id}`);
     } else {
-      // Use database - search by _id (which is the APX ID like APX123456)
-      const TransferModel = getTransferModel();
-      
-      if (!TransferModel) {
-        console.error('TransferModel is null - MongoDB might not be connected');
-        return res.status(500).json({
-          success: false,
-          message: 'Database connection error',
-          error: 'Transfer model not available. Please check MongoDB connection.'
-        });
-      }
-      
-      // Try exact match first
-      transfer = await TransferModel.findById(normalizedId);
-      console.log(`🔍 First attempt (findById): ${transfer ? '✅ Found' : '❌ Not found'}`);
-      
-      // If not found, try searching without case sensitivity
-      if (!transfer) {
-        try {
-          // MongoDB string fields are case-sensitive, but let's try a case-insensitive search
-          const allTransfers = await TransferModel.find({}).select('_id').limit(100).lean();
-          console.log(`📋 Found ${allTransfers.length} transfers in database`);
-          
-          if (allTransfers.length > 0) {
-            console.log(`🔎 Sample IDs:`, allTransfers.slice(0, 10).map(t => t._id).join(', '));
-            
-            // Try to find a case-insensitive match
-            const matched = allTransfers.find(t => 
-              t._id.toUpperCase() === normalizedId || 
-              t._id === normalizedId ||
-              t._id.toLowerCase() === normalizedId.toLowerCase()
-            );
-            
-            if (matched) {
-              console.log(`✅ Found case-insensitive match: ${matched._id}`);
-              transfer = await TransferModel.findById(matched._id);
-            }
-          }
-        } catch (searchError) {
-          console.error('Search error:', searchError);
+      // Log available transfers for debugging
+      try {
+        const count = await Transfer.countDocuments({});
+        const sampleIds = await Transfer.find({}).select('_id').limit(10).lean();
+        console.log(`❌ Transfer lookup failed for ID: ${normalizedId}`);
+        console.log(`📊 Total transfers in database: ${count}`);
+        if (sampleIds.length > 0) {
+          console.log(`📋 Sample transfer IDs:`, sampleIds.map(t => t._id).join(', '));
+        } else {
+          console.log(`⚠️ No transfers found in database`);
         }
-      }
-      
-      // If still not found, try to find by any variation of the ID
-      if (!transfer) {
-        // Remove leading zeros or try different formats
-        const digits = normalizedId.replace(/^APX/i, '');
-        if (digits) {
-          // Try with leading zeros
-          const paddedDigits = digits.padStart(6, '0');
-          const paddedId = `APX${paddedDigits}`;
-          console.log(`🔍 Trying padded version: ${paddedId}`);
-          transfer = await TransferModel.findById(paddedId);
-          
-          // Also try without padding (if original had padding)
-          if (!transfer && digits.length === 6) {
-            const unpaddedDigits = digits.replace(/^0+/, '');
-            if (unpaddedDigits !== digits) {
-              const unpaddedId = `APX${unpaddedDigits}`;
-              console.log(`🔍 Trying unpadded version: ${unpaddedId}`);
-              transfer = await TransferModel.findById(unpaddedId);
-            }
-          }
-        }
-      }
-      
-      // Debug: Log what we found
-      if (transfer) {
-        console.log(`✅ Found transfer: ${transfer._id}`);
-      } else {
-        // Log available transfers for debugging
-        try {
-          const count = await TransferModel.countDocuments({});
-          const sampleIds = await TransferModel.find({}).select('_id').limit(10).lean();
-          console.log(`❌ Transfer lookup failed for ID: ${normalizedId}`);
-          console.log(`📊 Total transfers in database: ${count}`);
-          if (sampleIds.length > 0) {
-            console.log(`📋 Sample transfer IDs:`, sampleIds.map(t => t._id).join(', '));
-          } else {
-            console.log(`⚠️ No transfers found in database`);
-          }
-        } catch (debugError) {
-          console.error('Error during debug logging:', debugError);
-        }
+      } catch (debugError) {
+        console.error('Error during debug logging:', debugError);
       }
     }
     
@@ -190,89 +158,65 @@ const updateDriverLocation = async (req, res) => {
       });
     }
 
-    let transfer;
-    const TransferModel = getTransferModel();
+    let transfer = await Transfer.findById(id.toUpperCase());
     
-    if (isUsingMockData()) {
-      transfer = mockTransfers.find(t => t._id === id.toUpperCase());
-      if (transfer) {
-        // Update mock transfer location
-        transfer.location_tracking = transfer.location_tracking || {};
-        transfer.location_tracking.last_location = {
-          latitude: parseFloat(latitude),
-          longitude: parseFloat(longitude),
-          address: address || '',
-          timestamp: new Date()
-        };
-      }
-    } else {
-      if (!TransferModel) {
-        return res.status(500).json({
-          success: false,
-          message: 'Database connection error'
-        });
-      }
-      
-      transfer = await TransferModel.findById(id.toUpperCase());
-      
-      if (!transfer) {
-        return res.status(404).json({
-          success: false,
-          message: 'Transfer not found'
-        });
-      }
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found'
+      });
+    }
 
-      // Update location_tracking.last_location
-      if (!transfer.location_tracking) {
-        transfer.location_tracking = {
-          enabled: true,
-          last_location: {},
-          route_history: []
-        };
-      }
+    // Update location_tracking.last_location
+    if (!transfer.location_tracking) {
+      transfer.location_tracking = {
+        enabled: true,
+        last_location: {},
+        route_history: []
+      };
+    }
 
-      const timestamp = new Date();
-      
-      // Update last location
-      transfer.location_tracking.last_location = {
+    const timestamp = new Date();
+    
+    // Update last location
+    transfer.location_tracking.last_location = {
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      address: address || '',
+      timestamp: timestamp
+    };
+
+    // Add to route history
+    transfer.location_tracking.route_history.push({
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+      timestamp: timestamp,
+      speed: speed ? parseFloat(speed) : null,
+      heading: heading ? parseFloat(heading) : null
+    });
+
+    // Keep only last 100 route points to avoid bloating the database
+    if (transfer.location_tracking.route_history.length > 100) {
+      transfer.location_tracking.route_history = transfer.location_tracking.route_history.slice(-100);
+    }
+
+    // Also update assigned_driver_details.currentLocation for backwards compatibility
+    if (transfer.assigned_driver_details) {
+      transfer.assigned_driver_details.currentLocation = {
         latitude: parseFloat(latitude),
         longitude: parseFloat(longitude),
         address: address || '',
-        timestamp: timestamp
+        lastUpdated: timestamp
       };
-
-      // Add to route history
-      transfer.location_tracking.route_history.push({
-        latitude: parseFloat(latitude),
-        longitude: parseFloat(longitude),
-        timestamp: timestamp,
-        speed: speed ? parseFloat(speed) : null,
-        heading: heading ? parseFloat(heading) : null
-      });
-
-      // Keep only last 100 route points to avoid bloating the database
-      if (transfer.location_tracking.route_history.length > 100) {
-        transfer.location_tracking.route_history = transfer.location_tracking.route_history.slice(-100);
+      
+      if (status) {
+        transfer.assigned_driver_details.status = status;
+        transfer.transfer_details.transfer_status = status;
       }
-
-      // Also update assigned_driver_details.currentLocation for backwards compatibility
-      if (transfer.assigned_driver_details) {
-        transfer.assigned_driver_details.currentLocation = {
-          latitude: parseFloat(latitude),
-          longitude: parseFloat(longitude),
-          address: address || '',
-          lastUpdated: timestamp
-        };
-        
-        if (status) {
-          transfer.assigned_driver_details.status = status;
-          transfer.transfer_details.transfer_status = status;
-        }
-      }
-
-      // Save to database
-      await transfer.save();
     }
+
+    // Save to database
+    await transfer.save();
     
     res.json({
       success: true,
@@ -302,13 +246,7 @@ const getTrackingHistory = async (req, res) => {
   try {
     const { id } = req.params;
     
-    let transfer;
-    
-    if (isUsingMockData()) {
-      transfer = mockTransfers.find(t => t._id === id);
-    } else {
-      transfer = await Transfer.findById(id);
-    }
+    const transfer = await Transfer.findById(id);
     
     if (!transfer) {
       return res.status(404).json({

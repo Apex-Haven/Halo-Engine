@@ -1,13 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { MockUser, MockUserService } = require('../services/mockUserService');
 const { authenticate, authorize } = require('../middleware/auth');
-
-// Helper function to get the appropriate User model
-const getUserModel = () => {
-  return MockUserService.isUsingMockData() ? MockUser : User;
-};
 
 /**
  * @route   GET /api/travelers
@@ -16,7 +10,7 @@ const getUserModel = () => {
  */
 router.get('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
+    const mongoose = require('mongoose');
     let query = { role: 'TRAVELER' };
 
     // If not Super Admin/Admin, only show travelers created by this client
@@ -24,7 +18,7 @@ router.get('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), asy
       query.createdBy = req.user._id;
     }
 
-    const travelers = await UserModel.find(query)
+    const travelers = await User.find(query)
       .select('-password')
       .populate('createdBy', 'username email profile')
       .sort({ createdAt: -1 });
@@ -52,8 +46,7 @@ router.get('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), asy
 router.get('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { id } = req.params;
-    const UserModel = getUserModel();
-    const traveler = await UserModel.findById(id)
+    const traveler = await User.findById(id)
       .select('-password')
       .populate('createdBy', 'username email profile');
 
@@ -88,10 +81,10 @@ router.get('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), 
 
 /**
  * @route   POST /api/travelers
- * @desc    Create traveler (CLIENT role only)
- * @access  Private (CLIENT role only)
+ * @desc    Create traveler
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN)
  */
-router.post('/', authenticate, authorize(['CLIENT']), async (req, res) => {
+router.post('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { username, email, password, profile, preferences } = req.body;
 
@@ -103,10 +96,8 @@ router.post('/', authenticate, authorize(['CLIENT']), async (req, res) => {
       });
     }
 
-    const UserModel = getUserModel();
-
     // Check if user already exists
-    const existingUser = await UserModel.findOne({
+    const existingUser = await User.findOne({
       $or: [{ email }, { username }]
     });
 
@@ -118,7 +109,7 @@ router.post('/', authenticate, authorize(['CLIENT']), async (req, res) => {
     }
 
     // Create traveler
-    const traveler = new UserModel({
+    const traveler = new User({
       username,
       email,
       password,
@@ -144,7 +135,7 @@ router.post('/', authenticate, authorize(['CLIENT']), async (req, res) => {
     await traveler.save();
 
     // Return traveler without password
-    const travelerResponse = await UserModel.findById(traveler._id)
+    const travelerResponse = await User.findById(traveler._id)
       .select('-password')
       .populate('createdBy', 'username email profile');
 
@@ -166,15 +157,14 @@ router.post('/', authenticate, authorize(['CLIENT']), async (req, res) => {
 /**
  * @route   PUT /api/travelers/:id
  * @desc    Update traveler
- * @access  Private (CLIENT role only - can only update their own travelers)
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN - CLIENT can only update their own travelers)
  */
-router.put('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
+router.put('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { id } = req.params;
     const { username, email, password, profile, preferences } = req.body;
 
-    const UserModel = getUserModel();
-    const traveler = await UserModel.findById(id);
+    const traveler = await User.findById(id);
 
     if (!traveler || traveler.role !== 'TRAVELER') {
       return res.status(404).json({
@@ -183,8 +173,8 @@ router.put('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
       });
     }
 
-    // Verify client created this traveler
-    if (traveler.createdBy.toString() !== req.user._id.toString()) {
+    // Verify client created this traveler (admins can update any traveler)
+    if (req.user.role === 'CLIENT' && traveler.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'
@@ -193,7 +183,7 @@ router.put('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
 
     // Check if email/username is already taken by another user
     if (email !== traveler.email || username !== traveler.username) {
-      const existingUser = await UserModel.findOne({
+      const existingUser = await User.findOne({
         $or: [{ email }, { username }],
         _id: { $ne: id }
       });
@@ -220,7 +210,7 @@ router.put('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
       updateData.password = password;
     }
 
-    const updatedTraveler = await UserModel.findByIdAndUpdate(
+    const updatedTraveler = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
       { new: true, runValidators: true }
@@ -245,13 +235,13 @@ router.put('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
 /**
  * @route   DELETE /api/travelers/:id
  * @desc    Delete traveler
- * @access  Private (CLIENT role only - can only delete their own travelers)
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN - CLIENT can only delete their own travelers)
  */
-router.delete('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
+router.delete('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { id } = req.params;
-    const UserModel = getUserModel();
-    const traveler = await UserModel.findById(id);
+
+    const traveler = await User.findById(id);
 
     if (!traveler || traveler.role !== 'TRAVELER') {
       return res.status(404).json({
@@ -260,15 +250,15 @@ router.delete('/:id', authenticate, authorize(['CLIENT']), async (req, res) => {
       });
     }
 
-    // Verify client created this traveler
-    if (traveler.createdBy.toString() !== req.user._id.toString()) {
+    // Verify client created this traveler (admins can delete any traveler)
+    if (req.user.role === 'CLIENT' && traveler.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Access denied'
       });
     }
 
-    await UserModel.findByIdAndDelete(id);
+    await User.findByIdAndDelete(id);
 
     res.json({
       success: true,

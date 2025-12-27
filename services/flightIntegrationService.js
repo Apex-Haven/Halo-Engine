@@ -1,5 +1,7 @@
 const axios = require('axios');
-const { MockTransferService } = require('./mockTransferService');
+const Transfer = require('../models/Transfer');
+const User = require('../models/User');
+const Vendor = require('../models/Vendor');
 
 class FlightIntegrationService {
   constructor() {
@@ -51,8 +53,11 @@ class FlightIntegrationService {
   // Update all active flights
   async updateAllFlights() {
     try {
-      const TransferModel = MockTransferService.getTransferModel();
-      const transfers = await TransferModel.findRequiringFlightUpdate();
+      // Find transfers that require flight updates (transfers with flight details and status not completed/cancelled)
+      const transfers = await Transfer.find({
+        'flight_details.flight_number': { $exists: true, $ne: null },
+        'transfer_details.transfer_status': { $nin: ['completed', 'cancelled'] }
+      });
       
       console.log(`🔄 Updating ${transfers.length} flights...`);
       
@@ -326,21 +331,19 @@ class FlightIntegrationService {
   // Create transfer from flight booking
   async createTransferFromFlight(flightData, customerId, vendorId) {
     try {
-      const TransferModel = MockTransferService.getTransferModel();
-      
       // Generate unique transfer ID
       const transferId = this.generateTransferId();
       
       // Get customer and vendor details
-      const customer = await this.getCustomerDetails(customerId);
-      const vendor = await this.getVendorDetails(vendorId);
+      const customer = await User.findById(customerId);
+      const vendor = await Vendor.findById(vendorId);
       
       if (!customer || !vendor) {
         throw new Error('Customer or vendor not found');
       }
       
       // Create transfer
-      const transfer = new TransferModel({
+      const transfer = new Transfer({
         _id: transferId,
         customer_id: customerId,
         customer_details: {
@@ -415,9 +418,7 @@ class FlightIntegrationService {
   // Get customer details
   async getCustomerDetails(customerId) {
     try {
-      const { MockUserService } = require('./mockUserService');
-      const UserModel = MockUserService.getUserModel();
-      return await UserModel.findById(customerId);
+      return await User.findById(customerId);
     } catch (error) {
       console.error('Error getting customer details:', error.message);
       return null;
@@ -427,9 +428,7 @@ class FlightIntegrationService {
   // Get vendor details
   async getVendorDetails(vendorId) {
     try {
-      const { MockVendorService } = require('./mockVendorService');
-      const VendorModel = MockVendorService.getVendorModel();
-      return await VendorModel.findById(vendorId);
+      return await Vendor.findById(vendorId);
     } catch (error) {
       console.error('Error getting vendor details:', error.message);
       return null;
@@ -439,12 +438,10 @@ class FlightIntegrationService {
   // Get transfer statistics
   async getTransferStatistics() {
     try {
-      const TransferModel = MockTransferService.getTransferModel();
-      
-      const total = await TransferModel.countDocuments();
-      const active = await TransferModel.countDocuments({ 'transfer_details.transfer_status': { $in: ['assigned', 'enroute', 'waiting', 'in_progress'] } });
-      const completed = await TransferModel.countDocuments({ 'transfer_details.transfer_status': 'completed' });
-      const pending = await TransferModel.countDocuments({ 'transfer_details.transfer_status': 'pending' });
+      const total = await Transfer.countDocuments();
+      const active = await Transfer.countDocuments({ 'transfer_details.transfer_status': { $in: ['assigned', 'enroute', 'waiting', 'in_progress'] } });
+      const completed = await Transfer.countDocuments({ 'transfer_details.transfer_status': 'completed' });
+      const pending = await Transfer.countDocuments({ 'transfer_details.transfer_status': 'pending' });
       
       return {
         total,

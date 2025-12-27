@@ -1,19 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { MockUser, MockUserService } = require('../services/mockUserService');
 const { authenticate, authorize } = require('../middleware/auth');
-
-// Helper function to get the appropriate User model
-const getUserModel = () => {
-  const mongoose = require('mongoose');
-  // Check if MongoDB is actually connected and ready
-  if (mongoose.connection.readyState === 1) {
-    return User;
-  }
-  // Fall back to mock data if not connected
-  return MockUser;
-};
 
 /**
  * @route   GET /api/users
@@ -22,8 +10,7 @@ const getUserModel = () => {
  */
 router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
-    const users = await UserModel.find({
+    const users = await User.find({
       role: { $in: ['SUPER_ADMIN', 'ADMIN', 'VENDOR', 'CLIENT'] }
     })
     .select('-password')
@@ -54,39 +41,16 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, r
  */
 router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
-    
-    // Check if this is a buffering timeout error and fall back to mock
-    try {
-      const vendors = await UserModel.find({ role: 'VENDOR' })
-        .select('-password')
-        .populate('assignedClients', 'username email profile')
-        .sort({ createdAt: -1 });
+    const vendors = await User.find({ role: 'VENDOR' })
+      .select('-password')
+      .populate('assignedClients', 'username email profile')
+      .sort({ createdAt: -1 });
 
-      res.json({
-        success: true,
-        data: vendors,
-        count: vendors.length
-      });
-    } catch (dbError) {
-      // If it's a buffering timeout and we're using real User model, fall back to mock
-      if (dbError.name === 'MongooseError' && dbError.message.includes('buffering') && UserModel === User) {
-        console.warn('⚠️ MongoDB buffering timeout, falling back to mock data');
-        const MockUserModel = MockUser;
-        const vendors = await MockUserModel.find({ role: 'VENDOR' })
-          .select('-password')
-          .populate('assignedClients', 'username email profile')
-          .sort({ createdAt: -1 });
-        
-        res.json({
-          success: true,
-          data: vendors,
-          count: vendors.length
-        });
-      } else {
-        throw dbError;
-      }
-    }
+    res.json({
+      success: true,
+      data: vendors,
+      count: vendors.length
+    });
   } catch (error) {
     console.error('Error fetching vendors:', error);
     res.status(500).json({
@@ -104,39 +68,17 @@ router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async 
  */
 router.get('/customers', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
     
-    // Check if this is a buffering timeout error and fall back to mock
-    try {
-      const clients = await UserModel.find({ role: 'CLIENT' })
-        .select('-password')
-        .populate('assignedVendors', 'username email profile')
-        .sort({ createdAt: -1 });
+    const clients = await User.find({ role: 'CLIENT' })
+      .select('-password')
+      .populate('assignedVendors', 'username email profile')
+      .sort({ createdAt: -1 });
 
-      res.json({
-        success: true,
-        data: clients,
-        count: clients.length
-      });
-    } catch (dbError) {
-      // If it's a buffering timeout and we're using real User model, fall back to mock
-      if (dbError.name === 'MongooseError' && dbError.message.includes('buffering') && UserModel === User) {
-        console.warn('⚠️ MongoDB buffering timeout, falling back to mock data');
-        const MockUserModel = MockUser;
-        const clients = await MockUserModel.find({ role: 'CLIENT' })
-          .select('-password')
-          .populate('assignedVendors', 'username email profile')
-          .sort({ createdAt: -1 });
-        
-        res.json({
-          success: true,
-          data: clients,
-          count: clients.length
-        });
-      } else {
-        throw dbError;
-      }
-    }
+    res.json({
+      success: true,
+      data: clients,
+      count: clients.length
+    });
   } catch (error) {
     console.error('Error fetching customers:', error);
     res.status(500).json({
@@ -154,39 +96,17 @@ router.get('/customers', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), asyn
  */
 router.get('/clients', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
     
-    // Check if this is a buffering timeout error and fall back to mock
-    try {
-      const clients = await UserModel.find({ role: 'CLIENT' })
-        .select('-password')
-        .populate('assignedVendors', 'username email profile')
-        .sort({ createdAt: -1 });
+    const clients = await User.find({ role: 'CLIENT' })
+      .select('-password')
+      .populate('assignedVendors', 'username email profile')
+      .sort({ createdAt: -1 });
 
-      res.json({
-        success: true,
-        data: clients,
-        count: clients.length
-      });
-    } catch (dbError) {
-      // If it's a buffering timeout and we're using real User model, fall back to mock
-      if (dbError.name === 'MongooseError' && dbError.message.includes('buffering') && UserModel === User) {
-        console.warn('⚠️ MongoDB buffering timeout, falling back to mock data');
-        const MockUserModel = MockUser;
-        const clients = await MockUserModel.find({ role: 'CLIENT' })
-          .select('-password')
-          .populate('assignedVendors', 'username email profile')
-          .sort({ createdAt: -1 });
-        
-        res.json({
-          success: true,
-          data: clients,
-          count: clients.length
-        });
-      } else {
-        throw dbError;
-      }
-    }
+    res.json({
+      success: true,
+      data: clients,
+      count: clients.length
+    });
   } catch (error) {
     console.error('Error fetching clients:', error);
     res.status(500).json({
@@ -205,9 +125,8 @@ router.get('/clients', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async 
 router.get('/vendors/:vendorId/clients', authenticate, async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const UserModel = getUserModel();
 
-    const vendor = await UserModel.findById(vendorId)
+    const vendor = await User.findById(vendorId)
       .select('assignedClients')
       .populate('assignedClients', 'username email profile.firstName profile.lastName');
 
@@ -247,9 +166,8 @@ router.get('/vendors/:vendorId/clients', authenticate, async (req, res) => {
 router.get('/clients/:clientId/vendors', authenticate, async (req, res) => {
   try {
     const { clientId } = req.params;
-    const UserModel = getUserModel();
 
-    const client = await UserModel.findById(clientId)
+    const client = await User.findById(clientId)
       .select('assignedVendors')
       .populate('assignedVendors', 'username email profile.firstName profile.lastName vendorDetails.companyName');
 
@@ -288,8 +206,7 @@ router.get('/clients/:clientId/vendors', authenticate, async (req, res) => {
  */
 router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
-    let user = await UserModel.findById(req.params.id);
+    let user = await User.findById(req.params.id);
     
     if (!user) {
       return res.status(404).json({
@@ -299,21 +216,11 @@ router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req
     }
     
     // Apply select and populate if user is found
-    const mongoose = require('mongoose');
-    if (mongoose.connection.readyState === 1 && UserModel === User) {
-      // Real MongoDB - use chainable query
-      user = await UserModel.findById(req.params.id)
-        .select('-password')
-        .populate('createdBy', 'username email profile')
-        .populate('assignedClients', 'username email profile')
-        .populate('assignedVendors', 'username email profile');
-    } else {
-      // Mock data - apply select manually
-      if (user.select) {
-        user = user.select('-password');
-      }
-      // Mock populate would need to be implemented separately
-    }
+    user = await User.findById(req.params.id)
+      .select('-password')
+      .populate('createdBy', 'username email profile')
+      .populate('assignedClients', 'username email profile')
+      .populate('assignedVendors', 'username email profile');
 
     res.json({
       success: true,
@@ -360,10 +267,9 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, 
       });
     }
 
-    const UserModel = getUserModel();
     
     // Check if user already exists
-    const existingUser = await UserModel.findOne({
+    const existingUser = await User.findOne({
       $or: [{ email }, { username }]
     });
 
@@ -407,7 +313,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, 
     await user.save();
 
     // Return user without password
-    const userResponse = await UserModel.findById(user._id)
+    const userResponse = await User.findById(user._id)
       .select('-password')
       .populate('createdBy', 'username email profile');
 
@@ -436,8 +342,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req
     const userId = req.params.id;
     const { username, email, password, profile, preferences, vendorDetails } = req.body;
 
-    const UserModel = getUserModel();
-    const user = await UserModel.findById(userId);
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -456,7 +361,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req
 
     // Check if email/username is already taken by another user
     if (email !== user.email || username !== user.username) {
-      const existingUser = await UserModel.findOne({
+      const existingUser = await User.findOne({
         $or: [{ email }, { username }],
         _id: { $ne: userId }
       });
@@ -486,7 +391,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req
       updateData.password = password;
     }
 
-    const updatedUser = await UserModel.findByIdAndUpdate(
+    const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updateData },
       { new: true, runValidators: true }
@@ -518,8 +423,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req
 router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const userId = req.params.id;
-    const UserModel = getUserModel();
-    const user = await UserModel.findById(userId);
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -544,7 +448,7 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (
       });
     }
 
-    await UserModel.findByIdAndDelete(userId);
+    await User.findByIdAndDelete(userId);
 
     res.json({
       success: true,
@@ -568,10 +472,9 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (
 router.post('/vendors/:vendorId/assign-client/:clientId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { vendorId, clientId } = req.params;
-    const UserModel = getUserModel();
 
-    const vendor = await UserModel.findById(vendorId);
-    const client = await UserModel.findById(clientId);
+    const vendor = await User.findById(vendorId);
+    const client = await User.findById(clientId);
 
     if (!vendor || vendor.role !== 'VENDOR') {
       return res.status(404).json({
@@ -605,7 +508,7 @@ router.post('/vendors/:vendorId/assign-client/:clientId', authenticate, authoriz
       await client.save();
     }
 
-    const updatedVendor = await UserModel.findById(vendorId)
+    const updatedVendor = await User.findById(vendorId)
       .select('-password')
       .populate('assignedClients', 'username email profile');
 
@@ -632,10 +535,9 @@ router.post('/vendors/:vendorId/assign-client/:clientId', authenticate, authoriz
 router.delete('/vendors/:vendorId/unassign-client/:clientId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { vendorId, clientId } = req.params;
-    const UserModel = getUserModel();
 
-    const vendor = await UserModel.findById(vendorId);
-    const client = await UserModel.findById(clientId);
+    const vendor = await User.findById(vendorId);
+    const client = await User.findById(clientId);
 
     if (!vendor || vendor.role !== 'VENDOR') {
       return res.status(404).json({
@@ -663,7 +565,7 @@ router.delete('/vendors/:vendorId/unassign-client/:clientId', authenticate, auth
     );
     await client.save();
 
-    const updatedVendor = await UserModel.findById(vendorId)
+    const updatedVendor = await User.findById(vendorId)
       .select('-password')
       .populate('assignedClients', 'username email profile');
 

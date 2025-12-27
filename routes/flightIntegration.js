@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const FlightIntegrationService = require('../services/flightIntegrationService');
-const { MockTransferService } = require('../services/mockTransferService');
+const Transfer = require('../models/Transfer');
 const { authenticate, authorize } = require('../middleware/auth');
 
 // Initialize flight integration service
@@ -89,9 +89,8 @@ router.post('/update-flights', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 
 router.post('/update-flight/:flightNumber', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     const { flightNumber } = req.params;
-    const TransferModel = MockTransferService.getTransferModel();
     
-    const transfers = await TransferModel.find({ 'flight_details.flight_no': flightNumber.toUpperCase() });
+    const transfers = await Transfer.find({ 'flight_details.flight_no': flightNumber.toUpperCase() });
     
     if (transfers.length === 0) {
       return res.status(404).json({
@@ -170,8 +169,10 @@ router.get('/statistics', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPER
 // Get active transfers
 router.get('/active-transfers', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER']), async (req, res) => {
   try {
-    const TransferModel = MockTransferService.getTransferModel();
-    const activeTransfers = await TransferModel.findActiveTransfers();
+    // Find active transfers (not completed or cancelled)
+    const activeTransfers = await Transfer.find({
+      'transfer_details.transfer_status': { $nin: ['completed', 'cancelled'] }
+    });
     
     res.json({
       success: true,
@@ -191,8 +192,11 @@ router.get('/active-transfers', authenticate, authorize(['SUPER_ADMIN', 'ADMIN',
 // Get transfers requiring location update
 router.get('/location-updates', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
-    const TransferModel = MockTransferService.getTransferModel();
-    const transfers = await TransferModel.findRequiringLocationUpdate();
+    // Find transfers requiring location update (active transfers with flight details)
+    const transfers = await Transfer.find({
+      'flight_details.flight_number': { $exists: true, $ne: null },
+      'transfer_details.transfer_status': { $nin: ['completed', 'cancelled'] }
+    });
     
     res.json({
       success: true,
@@ -228,8 +232,7 @@ router.post('/update-location/:transferId', authenticate, authorize(['SUPER_ADMI
       });
     }
     
-    const TransferModel = MockTransferService.getTransferModel();
-    const transfer = await TransferModel.findById(transferId);
+    const transfer = await Transfer.findById(transferId);
     
     if (!transfer) {
       return res.status(404).json({
@@ -290,9 +293,8 @@ router.get('/flight/:flightNumber', authenticate, authorize(['SUPER_ADMIN', 'ADM
 router.get('/customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CUSTOMER']), async (req, res) => {
   try {
     const { customerId } = req.params;
-    const TransferModel = MockTransferService.getTransferModel();
     
-    const transfers = await TransferModel.find({ customer_id: customerId });
+    const transfers = await Transfer.find({ customer_id: customerId });
     
     res.json({
       success: true,
@@ -313,9 +315,8 @@ router.get('/customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADM
 router.get('/vendor/:vendorId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER']), async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const TransferModel = MockTransferService.getTransferModel();
     
-    const transfers = await TransferModel.find({ vendor_id: vendorId });
+    const transfers = await Transfer.find({ vendor_id: vendorId });
     
     res.json({
       success: true,
@@ -345,8 +346,7 @@ router.patch('/transfer/:transferId/status', authenticate, authorize(['SUPER_ADM
       });
     }
     
-    const TransferModel = MockTransferService.getTransferModel();
-    const transfer = await TransferModel.findById(transferId);
+    const transfer = await Transfer.findById(transferId);
     
     if (!transfer) {
       return res.status(404).json({

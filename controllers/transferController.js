@@ -4,29 +4,14 @@ const { sendTemplatedEmail } = require('../config/nodemailer');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
 
-// Check if we're using mock data - check actual MongoDB connection status
-const isUsingMockData = () => {
-  // Use mock data only if MongoDB is not connected
-  return mongoose.connection.readyState !== 1; // 1 = connected
-};
-
-// Get the appropriate Transfer model
-const getTransferModel = () => {
-  if (isUsingMockData()) {
-    const { MockTransfer } = require('../services/mockDataService');
-    return MockTransfer;
-  }
-  return Transfer;
-};
 
 // Create new transfer
 const createTransfer = async (req, res) => {
   try {
     const transferData = req.body;
-    const TransferModel = getTransferModel();
     
     // Check if transfer already exists
-    const existingTransfer = await TransferModel.findById(transferData._id);
+    const existingTransfer = await Transfer.findById(transferData._id);
     if (existingTransfer) {
       return res.status(409).json({
         success: false,
@@ -77,7 +62,7 @@ const createTransfer = async (req, res) => {
     }
 
     // Create new transfer
-    const transfer = new TransferModel(transferData);
+    const transfer = new Transfer(transferData);
     
     await transfer.save();
 
@@ -120,9 +105,8 @@ const createTransfer = async (req, res) => {
 const getTransfer = async (req, res) => {
   try {
     const { id } = req.params;
-    const TransferModel = getTransferModel();
     
-    const transfer = await TransferModel.findById(id);
+    const transfer = await Transfer.findById(id);
     if (!transfer) {
       return res.status(404).json({
         success: false,
@@ -148,7 +132,6 @@ const getTransfer = async (req, res) => {
 // Get all transfers with filtering and pagination
 const getTransfers = async (req, res) => {
   try {
-    const TransferModel = getTransferModel();
     const mongoose = require('mongoose');
     const {
       page = 1,
@@ -183,12 +166,10 @@ const getTransfers = async (req, res) => {
           vendorConditions.push({ 'vendor_details.vendor_name': vendorCompanyName });
         }
         
-        // Also try to match by vendor_id ObjectId if Vendor model exists
-        const VendorModel = mongoose.connection.readyState === 1 
-          ? require('../models/Vendor')
-          : null;
+        // Also try to match by vendor_id ObjectId
+        const Vendor = require('../models/Vendor');
         
-        if (VendorModel && mongoose.connection.readyState === 1) {
+        if (Vendor) {
           try {
             let vendor = null;
             if (vendorCompanyName) {
@@ -278,16 +259,14 @@ const getTransfers = async (req, res) => {
 
     // Execute query with pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const transfers = await TransferModel.find(filter)
+    const transfers = await Transfer.find(filter)
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip(skip)
       .lean();
     
-    // Get total count for pagination (only for real MongoDB, mock data already has length)
-    const total = mongoose.connection.readyState === 1 
-      ? await TransferModel.countDocuments(filter)
-      : transfers.length;
+    // Get total count for pagination
+    const total = await Transfer.countDocuments(filter);
 
     res.json({
       success: true,
@@ -348,10 +327,9 @@ const assignDriver = async (req, res) => {
   try {
     const { id } = req.params;
     const driverDetails = req.body;
-    const TransferModel = getTransferModel();
     const mongoose = require('mongoose');
     
-    const transfer = await TransferModel.findById(id);
+    const transfer = await Transfer.findById(id);
     if (!transfer) {
       return res.status(404).json({
         success: false,
@@ -648,35 +626,8 @@ const deleteTransfer = async (req, res) => {
 // Get transfer statistics
 const getTransferStats = async (req, res) => {
   try {
-    const TransferModel = getTransferModel();
-    
-    if (isUsingMockData()) {
-      // Mock stats for demo
-      const mockStats = {
-        total: 156,
-        today: 23,
-        upcoming: 8,
-        byStatus: {
-          completed: 89,
-          in_progress: 12,
-          assigned: 8,
-          pending: 3,
-          cancelled: 2
-        },
-        successRate: 94,
-        averageRating: 4.7,
-        activeVendors: 8,
-        activeDrivers: 24
-      };
-      
-      return res.json({
-        success: true,
-        data: mockStats
-      });
-    }
-
     // Get status aggregation - use correct field path
-    const stats = await TransferModel.aggregate([
+    const stats = await Transfer.aggregate([
       {
         $group: {
           _id: '$transfer_details.transfer_status',
@@ -685,20 +636,20 @@ const getTransferStats = async (req, res) => {
       }
     ]);
 
-    const totalTransfers = await TransferModel.countDocuments();
+    const totalTransfers = await Transfer.countDocuments();
     
     // Today's transfers - use correct field path
     const today = new Date();
     const startOfDay = new Date(today.setHours(0, 0, 0, 0));
     const endOfDay = new Date(today.setHours(23, 59, 59, 999));
-    const todayTransfers = await TransferModel.countDocuments({
+    const todayTransfers = await Transfer.countDocuments({
       'flight_details.arrival_time': {
         $gte: startOfDay,
         $lte: endOfDay
       }
     });
 
-    const upcomingTransfers = await TransferModel.countDocuments({
+    const upcomingTransfers = await Transfer.countDocuments({
       'flight_details.arrival_time': { $gte: new Date() },
       'transfer_details.transfer_status': { $in: ['pending', 'assigned', 'enroute'] }
     });
@@ -710,7 +661,7 @@ const getTransferStats = async (req, res) => {
       : 0;
 
     // Count active drivers (drivers with assigned transfers)
-    const activeDriversResult = await TransferModel.aggregate([
+    const activeDriversResult = await Transfer.aggregate([
       {
         $match: {
           'assigned_driver_details.driver_id': { $exists: true, $ne: null },

@@ -3,15 +3,6 @@ const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
 const mongoose = require('mongoose');
 
-// Get transfer model (real or mock)
-const getTransferModel = () => {
-  if (mongoose.connection.readyState === 1) {
-    return Transfer;
-  }
-  // Use mock transfer service
-  const { MockTransfer } = require('../services/mockDataService');
-  return MockTransfer;
-};
 
 // Get transfers by vendor
 const getVendorTransfers = async (req, res) => {
@@ -25,7 +16,6 @@ const getVendorTransfers = async (req, res) => {
       date_to
     } = req.query;
 
-    const TransferModel = getTransferModel();
 
     // Build filter
     const filter = { 'vendor_details.vendor_id': vendorId };
@@ -45,20 +35,18 @@ const getVendorTransfers = async (req, res) => {
     }
 
     // Execute query with pagination
-    const transfers = await TransferModel.find(filter)
+    const transfers = await Transfer.find(filter)
       .sort({ 'flight_details.arrival_time': 1 })
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit))
       .lean();
 
-    const total = mongoose.connection.readyState === 1
-      ? await TransferModel.countDocuments(filter)
-      : transfers.length;
+    const total = await Transfer.countDocuments(filter);
 
     // Get vendor statistics
     let vendorStats = {};
     try {
-      const stats = await TransferModel.aggregate([
+      const stats = await Transfer.aggregate([
         { $match: { 'vendor_details.vendor_id': vendorId } },
         {
           $group: {

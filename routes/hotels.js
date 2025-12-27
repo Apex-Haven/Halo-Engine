@@ -1,17 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const Hotel = require('../models/Hotel');
-const { MockHotel, MockHotelService } = require('../services/mockHotelService');
 const HotelSearchService = require('../services/hotelSearchService');
 const { authenticate, authorize } = require('../middleware/auth');
 
 // Initialize hotel search service
 const hotelSearchService = new HotelSearchService();
-
-// Helper function to get the appropriate Hotel model
-const getHotelModel = () => {
-  return MockHotelService.isUsingMockData() ? MockHotel : Hotel;
-};
 
 // Search hotels by city
 router.post('/search', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
@@ -56,7 +50,6 @@ router.post('/search', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATI
 router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     const { city, starRating, minPrice, maxPrice, status, page = 1, limit = 20 } = req.query;
-    const HotelModel = getHotelModel();
     
     let query = {};
     
@@ -69,7 +62,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MAN
     }
     if (status) query.status = status;
     
-    const hotels = await HotelModel.find(query);
+    const hotels = await Hotel.find(query);
     
     // Simple pagination
     const startIndex = (page - 1) * limit;
@@ -99,8 +92,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MAN
 // Get single hotel
 router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CUSTOMER']), async (req, res) => {
   try {
-    const HotelModel = getHotelModel();
-    const hotel = await HotelModel.findById(req.params.id);
+    const hotel = await Hotel.findById(req.params.id);
     
     if (!hotel) {
       return res.status(404).json({
@@ -126,10 +118,9 @@ router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_
 // Create new hotel
 router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
-    const HotelModel = getHotelModel();
     
     // Check if hotel already exists
-    const existingHotel = await HotelModel.findOne({
+    const existingHotel = await Hotel.findOne({
       name: req.body.name,
       city: req.body.city?.toUpperCase()
     });
@@ -168,8 +159,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MA
 // Update hotel
 router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
-    const HotelModel = getHotelModel();
-    const hotel = await HotelModel.findById(req.params.id);
+    const hotel = await Hotel.findById(req.params.id);
     
     if (!hotel) {
       return res.status(404).json({
@@ -178,7 +168,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_
       });
     }
     
-    const updatedHotel = await HotelModel.findByIdAndUpdate(
+    const updatedHotel = await Hotel.findByIdAndUpdate(
       req.params.id,
       { ...req.body, updatedAt: new Date() },
       { new: true }
@@ -203,9 +193,8 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_
 router.post('/:id/assign', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     const { customerId, checkIn, checkOut, guests, roomType, notes, bookingReference } = req.body;
-    const HotelModel = getHotelModel();
     
-    const hotel = await HotelModel.findById(req.params.id);
+    const hotel = await Hotel.findById(req.params.id);
     if (!hotel) {
       return res.status(404).json({
         success: false,
@@ -250,9 +239,8 @@ router.post('/:id/assign', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPE
 router.get('/customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CUSTOMER']), async (req, res) => {
   try {
     const { customerId } = req.params;
-    const HotelModel = getHotelModel();
     
-    const hotels = await HotelModel.find({ 'assignedToCustomers.customerId': customerId });
+    const hotels = await Hotel.find({ 'assignedToCustomers.customerId': customerId });
     
     res.json({
       success: true,
@@ -273,9 +261,8 @@ router.get('/customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADM
 router.get('/city/:city', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CUSTOMER']), async (req, res) => {
   try {
     const { city } = req.params;
-    const HotelModel = getHotelModel();
     
-    const hotels = await HotelModel.find({ city: city.toUpperCase() });
+    const hotels = await Hotel.find({ city: city.toUpperCase() });
     
     res.json({
       success: true,
@@ -298,8 +285,7 @@ router.patch('/:id/booking/:bookingIndex', authenticate, authorize(['SUPER_ADMIN
     const { bookingIndex } = req.params;
     const { bookingStatus } = req.body;
     
-    const HotelModel = getHotelModel();
-    const hotel = await HotelModel.findById(req.params.id);
+    const hotel = await Hotel.findById(req.params.id);
     
     if (!hotel) {
       return res.status(404).json({
@@ -342,8 +328,7 @@ router.patch('/:id/booking/:bookingIndex', authenticate, authorize(['SUPER_ADMIN
 // Delete hotel
 router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const HotelModel = getHotelModel();
-    const hotel = await HotelModel.findById(req.params.id);
+    const hotel = await Hotel.findById(req.params.id);
     
     if (!hotel) {
       return res.status(404).json({
@@ -364,7 +349,7 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (
       });
     }
     
-    await HotelModel.findByIdAndDelete(req.params.id);
+    await Hotel.findByIdAndDelete(req.params.id);
     
     res.json({
       success: true,
@@ -383,24 +368,28 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (
 // Get hotel statistics
 router.get('/stats/overview', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
-    const HotelModel = getHotelModel();
     
-    const totalHotels = await HotelModel.countDocuments();
-    const activeHotels = await HotelModel.countDocuments({ status: 'active', isAvailable: true });
-    const verifiedHotels = await HotelModel.countDocuments({ verified: true });
+    const totalHotels = await Hotel.countDocuments();
+    const activeHotels = await Hotel.countDocuments({ status: 'active', isAvailable: true });
+    const verifiedHotels = await Hotel.countDocuments({ verified: true });
     
     // Get hotels by star rating
     const byStars = {
-      five: await HotelModel.countDocuments({ starRating: 5 }),
-      four: await HotelModel.countDocuments({ starRating: 4 }),
-      three: await HotelModel.countDocuments({ starRating: 3 })
+      five: await Hotel.countDocuments({ starRating: 5 }),
+      four: await Hotel.countDocuments({ starRating: 4 }),
+      three: await Hotel.countDocuments({ starRating: 3 })
     };
     
-    // Get total bookings
-    let totalBookings = 0;
-    for (const hotel of MockHotelService.hotels.values()) {
-      totalBookings += hotel.performance.totalBookings || 0;
-    }
+    // Get total bookings from database
+    const bookingsResult = await Hotel.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalBookings: { $sum: '$performance.totalBookings' }
+        }
+      }
+    ]);
+    const totalBookings = bookingsResult[0]?.totalBookings || 0;
     
     res.json({
       success: true,

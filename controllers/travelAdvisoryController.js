@@ -79,6 +79,7 @@ const createOrUpdatePreferences = async (req, res) => {
 
     // Check if client exists
     const client = await User.findById(clientId);
+    
     if (!client) {
       return res.status(404).json({
         success: false,
@@ -846,12 +847,7 @@ const getDashboard = async (req, res) => {
     try {
       const mongoose = require('mongoose');
       
-      // Check if MongoDB is connected
-      if (mongoose.connection.readyState !== 1) {
-        console.log('MongoDB not connected, returning empty dashboard');
-        preferences = [];
-      } else {
-        preferences = await ClientTravelPreferences.find(query)
+      preferences = await ClientTravelPreferences.find(query)
           .populate({
             path: 'clientId',
             select: 'username email profile',
@@ -864,7 +860,6 @@ const getDashboard = async (req, res) => {
           })
           .sort({ createdAt: -1 })
           .lean();
-      }
     } catch (dbError) {
       // If collection doesn't exist or model not registered, return empty results
       console.error('Database error in getDashboard:', dbError);

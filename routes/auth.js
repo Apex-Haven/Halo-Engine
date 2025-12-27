@@ -3,24 +3,9 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { MockUser } = require('../services/mockUserService');
 const { authenticate, authorize } = require('../middleware/auth');
 const { authLimiter, registrationLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 const { logAuthEvent } = require('../middleware/auditLogger');
-
-// Check if we're using mock data
-const isUsingMockData = () => {
-  const mongoose = require('mongoose');
-  // Use mock data only if MongoDB is not connected
-  return mongoose.connection.readyState !== 1; // 1 = connected
-};
-
-// Get the appropriate User model
-const getUserModel = () => {
-  const mongoose = require('mongoose');
-  // Use real database if MongoDB is connected, otherwise use mock
-  return mongoose.connection.readyState === 1 ? User : MockUser;
-};
 
 /**
  * @route   POST /api/auth/register
@@ -147,23 +132,7 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     // Find user by email
-    const mongoose = require('mongoose');
-    const UserModel = getUserModel();
-    let user;
-    
-    if (mongoose.connection.readyState === 1) {
-      // Real MongoDB - use Mongoose query with password field
-      user = await UserModel.findOne({ email }).select('+password');
-    } else {
-      // Mock data - find user directly from the Map to get the actual instance
-      const { MockUserService } = require('../services/mockUserService');
-      for (const u of MockUserService.users.values()) {
-        if (u.email === email) {
-          user = u;
-          break;
-        }
-      }
-    }
+    const user = await User.findOne({ email }).select('+password');
     
     if (!user) {
       return res.status(401).json({

@@ -58,6 +58,12 @@ const userSchema = new mongoose.Schema({
       default: null
     }
   },
+  // Track who created this user
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   // Role-specific data
   vendorId: {
     type: String,
@@ -158,7 +164,8 @@ const userSchema = new mongoose.Schema({
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
   },
-  collection: 'users'
+  collection: 'users',
+  strictPopulate: false // Allow populating fields that might not be strictly defined
 });
 
 // Indexes

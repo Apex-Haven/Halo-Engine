@@ -1,26 +1,19 @@
 const mongoose = require('mongoose');
 
 const connectDB = async () => {
+  // Check if MongoDB URI is configured
+  if (!process.env.MONGODB_URI) {
+    console.error('❌ MONGODB_URI not found in environment variables.');
+    console.error('❌ MongoDB connection is required. Please set MONGODB_URI in your .env file.');
+    console.error('📝 Example: MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/halo?retryWrites=true&w=majority');
+    process.exit(1);
+  }
+
   try {
-    // Check if MongoDB URI is configured
-    if (!process.env.MONGODB_URI) {
-      console.warn('⚠️ MONGODB_URI not found in environment variables.');
-      console.warn('⚠️ Using in-memory mode for demo purposes.');
-      console.warn('⚠️ Data will not persist between server restarts.');
-      console.warn('📝 To enable database: Create .env file and set MONGODB_URI');
-      console.warn('📝 See MONGODB_SETUP_GUIDE.md for instructions\n');
-      return null;
-    }
-
-    // Allow local MongoDB connections (for local development)
-    // Only skip if it's the exact default localhost URI without actual setup
-
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       maxPoolSize: 10, // Maintain up to 10 socket connections
       serverSelectionTimeoutMS: 10000, // Keep trying to send operations for 10 seconds
       socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      bufferMaxEntries: 0, // Disable mongoose buffering; throw error immediately if not connected
-      bufferCommands: false, // Disable mongoose buffering
     });
 
     console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
@@ -40,9 +33,9 @@ const connectDB = async () => {
 
     return conn;
   } catch (error) {
-    console.warn('⚠️ Database connection failed:', error.message);
-    console.warn('⚠️ Running in demo mode without database persistence.');
-    return null;
+    console.error('❌ Database connection failed:', error.message);
+    console.error('❌ MongoDB connection is required. Please check your MONGODB_URI and ensure MongoDB is accessible.');
+    process.exit(1);
   }
 };
 

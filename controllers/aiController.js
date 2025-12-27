@@ -1,19 +1,6 @@
 const aiService = require('../services/aiService');
 const Transfer = require('../models/Transfer');
-const { MockTransfer } = require('../services/mockDataService');
 
-// Check if we're using mock data
-const isUsingMockData = () => {
-  return !process.env.MONGODB_URI || process.env.MONGODB_URI === 'mongodb://localhost:27017/halo';
-};
-
-// Get the appropriate Transfer model
-const getTransferModel = () => {
-  if (isUsingMockData()) {
-    return MockTransfer;
-  }
-  return Transfer;
-};
 
 /**
  * Predict delay for a specific transfer
@@ -21,10 +8,9 @@ const getTransferModel = () => {
 const predictTransferDelay = async (req, res) => {
   try {
     const { transferId } = req.params;
-    const TransferModel = getTransferModel();
     
     // Find the transfer
-    const transfer = await TransferModel.findById(transferId);
+    const transfer = await Transfer.findById(transferId);
     if (!transfer) {
       return res.status(404).json({
         success: false,
@@ -36,15 +22,13 @@ const predictTransferDelay = async (req, res) => {
     const prediction = await aiService.predictFlightDelay(transfer.flight_details);
 
     // Store prediction in transfer (optional - for tracking accuracy later)
-    if (!isUsingMockData()) {
-      transfer.ai_prediction = {
-        delayProbability: prediction.prediction.delayProbability,
-        estimatedDelayMinutes: prediction.prediction.estimatedDelayMinutes,
-        riskLevel: prediction.prediction.riskLevel,
-        predictedAt: new Date()
-      };
-      await transfer.save();
-    }
+    transfer.ai_prediction = {
+      delayProbability: prediction.prediction.delayProbability,
+      estimatedDelayMinutes: prediction.prediction.estimatedDelayMinutes,
+      riskLevel: prediction.prediction.riskLevel,
+      predictedAt: new Date()
+    };
+    await transfer.save();
 
     res.json({
       success: true,
@@ -68,10 +52,9 @@ const predictTransferDelay = async (req, res) => {
  */
 const predictAllActiveDelays = async (req, res) => {
   try {
-    const TransferModel = getTransferModel();
     
     // Get all active transfers (flights that haven't landed yet)
-    const activeTransfers = await TransferModel.find({
+    const activeTransfers = await Transfer.find({
       'flight_details.status': { $in: ['on_time', 'delayed', 'boarding', 'departed'] },
       'flight_details.arrival_time': { $gte: new Date() }
     }).limit(50);
@@ -128,10 +111,9 @@ const predictAllActiveDelays = async (req, res) => {
  */
 const getHighRiskFlights = async (req, res) => {
   try {
-    const TransferModel = getTransferModel();
     
     // Get active transfers
-    const activeTransfers = await TransferModel.find({
+    const activeTransfers = await Transfer.find({
       'flight_details.status': { $in: ['on_time', 'delayed', 'boarding', 'departed'] },
       'flight_details.arrival_time': { $gte: new Date() }
     }).limit(100);
@@ -180,7 +162,6 @@ const getHighRiskFlights = async (req, res) => {
  */
 const getAIDashboard = async (req, res) => {
   try {
-    const TransferModel = getTransferModel();
     
     // Get stats for different time windows
     const now = new Date();
@@ -188,12 +169,12 @@ const getAIDashboard = async (req, res) => {
     const next24Hours = new Date(now.getTime() + (24 * 60 * 60 * 1000));
 
     // Get transfers by time window
-    const next6HTransfers = await TransferModel.find({
+    const next6HTransfers = await Transfer.find({
       'flight_details.arrival_time': { $gte: now, $lte: next6Hours },
       'flight_details.status': { $in: ['on_time', 'delayed', 'boarding', 'departed'] }
     });
 
-    const next24HTransfers = await TransferModel.find({
+    const next24HTransfers = await Transfer.find({
       'flight_details.arrival_time': { $gte: now, $lte: next24Hours },
       'flight_details.status': { $in: ['on_time', 'delayed', 'boarding', 'departed'] }
     });
@@ -257,8 +238,7 @@ const recordActualDelay = async (req, res) => {
     const { transferId } = req.params;
     const { actualDelayMinutes } = req.body;
     
-    const TransferModel = getTransferModel();
-    const transfer = await TransferModel.findById(transferId);
+    const transfer = await Transfer.findById(transferId);
     
     if (!transfer) {
       return res.status(404).json({

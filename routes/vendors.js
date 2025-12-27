@@ -1,22 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const Vendor = require('../models/Vendor');
-const { MockVendor, MockVendorService } = require('../services/mockVendorService');
 const { authenticate, authorize } = require('../middleware/auth');
 const { validateVendor, validateVendorAssignment } = require('../middleware/validation');
-
-// Helper function to get the appropriate Vendor model
-const getVendorModel = () => {
-  const mongoose = require('mongoose');
-  // Use real database if MongoDB is connected, otherwise use mock
-  return mongoose.connection.readyState === 1 ? Vendor : MockVendor;
-};
 
 // Get all vendors
 router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER']), async (req, res) => {
   try {
     const { status, search, page = 1, limit = 10 } = req.query;
-    const VendorModel = getVendorModel();
     const mongoose = require('mongoose');
     
     let queryObj = {};
@@ -30,57 +21,24 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MAN
       ];
     }
     
-    // Check if MongoDB is connected
-    if (mongoose.connection.readyState === 1) {
-      // Real MongoDB - use proper queries
-      const skip = (page - 1) * parseInt(limit);
-      const vendors = await VendorModel.find(queryObj)
-        .limit(parseInt(limit))
-        .skip(skip)
-        .sort({ createdAt: -1 })
-        .lean();
-      const total = await VendorModel.countDocuments(queryObj);
+    const skip = (page - 1) * parseInt(limit);
+    const vendors = await Vendor.find(queryObj)
+      .limit(parseInt(limit))
+      .skip(skip)
+      .sort({ createdAt: -1 })
+      .lean();
+    const total = await Vendor.countDocuments(queryObj);
       
-      return res.json({
-        success: true,
-        vendors,
-        pagination: {
-          current: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          pages: Math.ceil(total / parseInt(limit))
-        }
-      });
-    } else {
-      // Mock data - filter in memory
-      let vendors = await VendorModel.find(queryObj);
-      let filteredVendors = Array.isArray(vendors) ? vendors : [];
-      
-      if (search) {
-        const searchLower = search.toLowerCase();
-        filteredVendors = filteredVendors.filter(vendor => 
-          vendor.companyName?.toLowerCase().includes(searchLower) ||
-          vendor.contactPerson?.firstName?.toLowerCase().includes(searchLower) ||
-          vendor.contactPerson?.lastName?.toLowerCase().includes(searchLower) ||
-          vendor.vendorId?.toLowerCase().includes(searchLower)
-        );
+    return res.json({
+      success: true,
+      vendors,
+      pagination: {
+        current: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
       }
-      
-      const startIndex = (page - 1) * parseInt(limit);
-      const endIndex = startIndex + parseInt(limit);
-      const paginatedVendors = filteredVendors.slice(startIndex, endIndex);
-      
-      return res.json({
-        success: true,
-        vendors: paginatedVendors,
-        pagination: {
-          current: parseInt(page),
-          limit: parseInt(limit),
-          total: filteredVendors.length,
-          pages: Math.ceil(filteredVendors.length / parseInt(limit))
-        }
-      });
-    }
+    });
   } catch (error) {
     console.error('Get vendors error:', error);
     res.status(500).json({
@@ -94,8 +52,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MAN
 // Get single vendor
 router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER']), async (req, res) => {
   try {
-    const VendorModel = getVendorModel();
-    const vendor = await VendorModel.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     
     if (!vendor) {
       return res.status(404).json({
@@ -121,7 +78,6 @@ router.get('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_
 // Create new vendor
 router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), validateVendor, async (req, res) => {
   try {
-    const VendorModel = getVendorModel();
     
     // Check if vendor already exists (only check vendorId if provided)
     const queryConditions = [
@@ -132,7 +88,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MA
       queryConditions.push({ vendorId: req.body.vendorId });
     }
     
-    const existingVendor = await VendorModel.findOne({
+    const existingVendor = await Vendor.findOne({
       $or: queryConditions
     });
     
@@ -149,7 +105,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MA
       delete vendorData.vendorId;
     }
     
-    const vendor = new VendorModel({
+    const vendor = new Vendor({
       ...vendorData,
       createdBy: req.user._id
     });
@@ -174,8 +130,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MA
 // Update vendor
 router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
-    const VendorModel = getVendorModel();
-    const vendor = await VendorModel.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     
     if (!vendor) {
       return res.status(404).json({
@@ -191,7 +146,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_
       updatedAt: new Date()
     };
     
-    const updatedVendor = await VendorModel.findByIdAndUpdate(
+    const updatedVendor = await Vendor.findByIdAndUpdate(
       req.params.id,
       updateData,
       { new: true, runValidators: true }
@@ -215,8 +170,7 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_
 // Delete vendor
 router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const VendorModel = getVendorModel();
-    const vendor = await VendorModel.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     
     if (!vendor) {
       return res.status(404).json({
@@ -233,7 +187,7 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (
       });
     }
     
-    await VendorModel.findByIdAndDelete(req.params.id);
+    await Vendor.findByIdAndDelete(req.params.id);
     
     res.json({
       success: true,
@@ -253,9 +207,8 @@ router.delete('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (
 router.post('/:id/assign-customer', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), validateVendorAssignment, async (req, res) => {
   try {
     const { customerId, notes } = req.body;
-    const VendorModel = getVendorModel();
     
-    const vendor = await VendorModel.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     if (!vendor) {
       return res.status(404).json({
         success: false,
@@ -304,9 +257,8 @@ router.post('/:id/assign-customer', authenticate, authorize(['SUPER_ADMIN', 'ADM
 router.delete('/:id/assign-customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     const { customerId } = req.params;
-    const VendorModel = getVendorModel();
     
-    const vendor = await VendorModel.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     if (!vendor) {
       return res.status(404).json({
         success: false,
@@ -340,9 +292,8 @@ router.delete('/:id/assign-customer/:customerId', authenticate, authorize(['SUPE
 router.get('/customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CUSTOMER']), async (req, res) => {
   try {
     const { customerId } = req.params;
-    const VendorModel = getVendorModel();
     
-    const vendors = await VendorModel.find({
+    const vendors = await Vendor.find({
       'assignedCustomers.customerId': customerId,
       status: 'active'
     });
@@ -366,9 +317,8 @@ router.get('/customer/:customerId', authenticate, authorize(['SUPER_ADMIN', 'ADM
 router.patch('/:id/performance', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     const { rating, totalBookings, completedBookings, cancelledBookings, averageResponseTime } = req.body;
-    const VendorModel = getVendorModel();
     
-    const vendor = await VendorModel.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     if (!vendor) {
       return res.status(404).json({
         success: false,
@@ -425,12 +375,11 @@ router.get('/:vendorId/transfers', authenticate, authorize(['SUPER_ADMIN', 'ADMI
 // Get vendor statistics (aggregated)
 router.get('/stats/overview', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER']), async (req, res) => {
   try {
-    const VendorModel = getVendorModel();
     const Transfer = require('../models/Transfer');
     const mongoose = require('mongoose');
     
     // Get vendor counts by status
-    const vendorStats = await VendorModel.aggregate([
+    const vendorStats = await Vendor.aggregate([
       {
         $group: {
           _id: '$status',
@@ -445,7 +394,7 @@ router.get('/stats/overview', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', '
     }, {});
     
     // Calculate average rating
-    const avgRatingResult = await VendorModel.aggregate([
+    const avgRatingResult = await Vendor.aggregate([
       {
         $group: {
           _id: null,
@@ -458,7 +407,7 @@ router.get('/stats/overview', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', '
     const avgRating = avgRatingResult[0]?.avgRating || 0;
     
     // Calculate total bookings across all vendors
-    const totalBookingsResult = await VendorModel.aggregate([
+    const totalBookingsResult = await Vendor.aggregate([
       {
         $group: {
           _id: null,
@@ -475,16 +424,12 @@ router.get('/stats/overview', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', '
       cancelledBookings: 0
     };
     
-    // Get total transfers from Transfer collection if available
+    // Get total transfers from Transfer collection
     let totalTransfers = 0;
-    if (mongoose.connection.readyState === 1) {
-      try {
-        totalTransfers = await Transfer.countDocuments();
-      } catch (err) {
-        // If Transfer model not available, use vendor performance data
-        totalTransfers = bookings.totalBookings;
-      }
-    } else {
+    try {
+      totalTransfers = await Transfer.countDocuments();
+    } catch (err) {
+      // If Transfer model not available, use vendor performance data
       totalTransfers = bookings.totalBookings;
     }
     

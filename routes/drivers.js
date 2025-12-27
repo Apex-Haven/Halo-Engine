@@ -1,13 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { MockUser, MockUserService } = require('../services/mockUserService');
 const { authenticate, authorize } = require('../middleware/auth');
-
-// Helper function to get the appropriate User model
-const getUserModel = () => {
-  return MockUserService.isUsingMockData() ? MockUser : User;
-};
 
 /**
  * @route   GET /api/drivers
@@ -16,7 +10,6 @@ const getUserModel = () => {
  */
 router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const UserModel = getUserModel();
     let query = { role: 'DRIVER' };
 
     // If not Super Admin/Admin, only show drivers for this vendor
@@ -25,26 +18,7 @@ router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), asy
       query.createdBy = req.user._id;
     }
 
-    // Check connection state before querying
-    const mongoose = require('mongoose');
-    if (mongoose.connection.readyState !== 1 && UserModel === User) {
-      // MongoDB not connected and trying to use real User model - fall back to mock
-      const { MockUser } = require('../services/mockUserService');
-      const MockUserModel = MockUser;
-      const drivers = await MockUserModel.find(query)
-        .select('-password')
-        .populate('createdBy', 'username email profile')
-        .populate('vendorId')
-        .sort({ createdAt: -1 });
-      
-      return res.json({
-        success: true,
-        data: drivers,
-        count: drivers.length
-      });
-    }
-
-    const drivers = await UserModel.find(query)
+    const drivers = await User.find(query)
       .select('-password')
       .populate('createdBy', 'username email profile')
       .populate('vendorId')
@@ -73,8 +47,7 @@ router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), asy
 router.get('/:id', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { id } = req.params;
-    const UserModel = getUserModel();
-    const driver = await UserModel.findById(id)
+    const driver = await User.findById(id)
       .select('-password')
       .populate('createdBy', 'username email profile')
       .populate('vendorId');
@@ -128,10 +101,9 @@ router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
       });
     }
 
-    const UserModel = getUserModel();
 
     // Check if user already exists
-    const existingUser = await UserModel.findOne({
+    const existingUser = await User.findOne({
       $or: [{ email }, { username }]
     });
 
@@ -146,7 +118,7 @@ router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
     const driverId = `DRV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     // Create driver
-    const driver = new UserModel({
+    const driver = new User({
       username,
       email,
       password,
@@ -182,7 +154,7 @@ router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
     await driver.save();
 
     // Return driver without password
-    const driverResponse = await UserModel.findById(driver._id)
+    const driverResponse = await User.findById(driver._id)
       .select('-password')
       .populate('createdBy', 'username email profile')
       .populate('vendorId');
@@ -212,8 +184,7 @@ router.put('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
     const { id } = req.params;
     const { username, email, password, profile, preferences, driverDetails } = req.body;
 
-    const UserModel = getUserModel();
-    const driver = await UserModel.findById(id);
+    const driver = await User.findById(id);
 
     if (!driver || driver.role !== 'DRIVER') {
       return res.status(404).json({
@@ -233,7 +204,7 @@ router.put('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
 
     // Check if email/username is already taken by another user
     if (email !== driver.email || username !== driver.username) {
-      const existingUser = await UserModel.findOne({
+      const existingUser = await User.findOne({
         $or: [{ email }, { username }],
         _id: { $ne: id }
       });
@@ -263,7 +234,7 @@ router.put('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
       updateData.password = password;
     }
 
-    const updatedDriver = await UserModel.findByIdAndUpdate(
+    const updatedDriver = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
       { new: true, runValidators: true }
@@ -294,8 +265,7 @@ router.put('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
 router.delete('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
   try {
     const { id } = req.params;
-    const UserModel = getUserModel();
-    const driver = await UserModel.findById(id);
+    const driver = await User.findById(id);
 
     if (!driver || driver.role !== 'DRIVER') {
       return res.status(404).json({
@@ -313,7 +283,7 @@ router.delete('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
       });
     }
 
-    await UserModel.findByIdAndDelete(id);
+    await User.findByIdAndDelete(id);
 
     res.json({
       success: true,
@@ -337,9 +307,8 @@ router.delete('/:id', authenticate, authorize(['VENDOR']), async (req, res) => {
 router.get('/:driverId/assigned-clients', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const { driverId } = req.params;
-    const UserModel = getUserModel();
 
-    const driver = await UserModel.findById(driverId);
+    const driver = await User.findById(driverId);
     if (!driver || driver.role !== 'DRIVER') {
       return res.status(404).json({
         success: false,
@@ -356,7 +325,7 @@ router.get('/:driverId/assigned-clients', authenticate, authorize(['VENDOR', 'SU
     }
 
     // Get vendor and their assigned clients
-    const vendor = await UserModel.findById(driver.vendorId)
+    const vendor = await User.findById(driver.vendorId)
       .select('assignedClients')
       .populate('assignedClients', 'username email profile.firstName profile.lastName');
 

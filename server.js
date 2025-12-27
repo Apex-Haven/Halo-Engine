@@ -4,10 +4,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-const { MockUserService } = require('./services/mockUserService');
-const { MockVendorService } = require('./services/mockVendorService');
-const { MockTransferService } = require('./services/mockTransferService');
-const { MockHotelService } = require('./services/mockHotelService');
 require('dotenv').config();
 
 // Validate environment variables before starting
@@ -263,30 +259,20 @@ process.on('SIGINT', async () => {
 const startServer = async () => {
   const dbConnection = await connectDB();
   
-  // Initialize mock data only if MongoDB is NOT connected
-  if (mongoose.connection.readyState !== 1) {
-    console.log('📦 Initializing mock data for demo mode...');
-    await MockUserService.initializeMockUsers();
-    await MockVendorService.initializeMockVendors();
-    await MockTransferService.initializeMockTransfers();
-    await MockHotelService.initializeMockHotels();
-  } else {
-    console.log('💾 Using real MongoDB database - skipping mock data initialization');
+  // Seed super admin if it doesn't exist
+  try {
+    const User = require('./models/User');
+    const existingSuperAdmin = await User.findOne({ email: 'superadmin@halo.com' });
     
-    // Seed super admin if it doesn't exist
-    try {
-      const User = require('./models/User');
-      const existingSuperAdmin = await User.findOne({ email: 'superadmin@halo.com' });
-      
-      if (!existingSuperAdmin) {
-        console.log('🌱 Seeding default Super Admin account...');
-        const superAdmin = new User({
-          username: 'superadmin',
-          email: 'superadmin@halo.com',
-          password: 'superadmin123',
-          role: 'SUPER_ADMIN',
-          profile: {
-            firstName: 'Super',
+    if (!existingSuperAdmin) {
+      console.log('🌱 Seeding default Super Admin account...');
+      const superAdmin = new User({
+        username: 'superadmin',
+        email: 'superadmin@halo.com',
+        password: 'superadmin123',
+        role: 'SUPER_ADMIN',
+        profile: {
+          firstName: 'Super',
             lastName: 'Admin',
             phone: '+1234567890'
           },
@@ -316,7 +302,6 @@ const startServer = async () => {
     } catch (error) {
       console.error('⚠️ Failed to seed super admin:', error.message);
     }
-  }
   
   app.listen(PORT, () => {
     console.log(`🚀 HALO Backend Server running on port ${PORT}`);
@@ -325,12 +310,8 @@ const startServer = async () => {
     console.log(`📋 Health Check: http://localhost:${PORT}/api/health`);
     console.log(`📚 API Documentation: http://localhost:${PORT}/api`);
     
-    // Start cron jobs if database is connected
-    if (mongoose.connection.readyState === 1) {
-      cronService.startAllJobs();
-    } else {
-      console.log('⚠️ Cron jobs disabled - running in demo mode');
-    }
+    // Start cron jobs
+    cronService.startAllJobs();
   });
 };
 
