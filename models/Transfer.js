@@ -337,7 +337,7 @@ const transferSchema = new mongoose.Schema({
 });
 
 // Indexes for performance
-transferSchema.index({ _id: 1 }, { unique: true });
+// Note: _id is automatically indexed by MongoDB, cannot override it
 transferSchema.index({ 'flight_details.flight_no': 1 });
 transferSchema.index({ 'vendor_details.vendor_id': 1 });
 transferSchema.index({ 'assigned_driver_details.driver_id': 1 });
