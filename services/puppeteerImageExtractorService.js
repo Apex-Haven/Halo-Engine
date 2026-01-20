@@ -25,157 +25,156 @@ class PuppeteerImageExtractorService {
       throw new Error('Puppeteer is disabled via DISABLE_PUPPETEER environment variable');
     }
 
-    try {
-      // Configure for Render.com environment
-      const launchOptions = {
-        headless: 'new', // Use new headless mode (better stealth)
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu',
-          '--window-size=1920,1080',
-          '--disable-blink-features=AutomationControlled', // Hide automation
-          '--single-process', // Required for Render
-          '--disable-software-rasterizer'
-        ],
-        ignoreHTTPSErrors: true
-      };
+    // Configure for Render.com environment
+    const launchOptions = {
+      headless: 'new', // Use new headless mode (better stealth)
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1920,1080',
+        '--disable-blink-features=AutomationControlled', // Hide automation
+        '--single-process', // Required for Render
+        '--disable-software-rasterizer'
+      ],
+      ignoreHTTPSErrors: true
+    };
 
-      // For Render.com, configure for cloud environment
-      if (process.env.RENDER || process.env.PUPPETEER_EXECUTABLE_PATH) {
-        // Use provided executable path if set (highest priority)
-        if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-          launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-          console.log(`[Puppeteer] Using Chrome from PUPPETEER_EXECUTABLE_PATH: ${launchOptions.executablePath}`);
-        } else if (process.env.RENDER) {
-          // On Render, try multiple locations
-          const fs = require('fs');
-          const path = require('path');
-          
-          console.log('[Puppeteer] Searching for Chrome on Render...');
-          
-          // Priority order: system Chrome > cache directory > home directory
-          const possiblePaths = [
-            '/usr/bin/chromium',           // System-wide Chromium (recommended)
-            '/usr/bin/chromium-browser',   // Alternative system path
-            '/usr/bin/google-chrome',       // Google Chrome if installed
-            '/usr/bin/google-chrome-stable', // Stable Chrome
-            '/opt/render/.cache/puppeteer/chrome/linux-143.0.7499.192/chrome-linux64/chrome', // Build cache
-            process.env.HOME + '/.cache/puppeteer/chrome/linux-143.0.7499.192/chrome-linux64/chrome' // User cache
-          ];
-          
-          let foundPath = null;
-          for (const chromePath of possiblePaths) {
-            try {
-              if (fs.existsSync(chromePath)) {
-                const stats = fs.statSync(chromePath);
-                if (stats.isFile()) {
-                  foundPath = chromePath;
-                  console.log(`[Puppeteer] Found Chrome at: ${chromePath}`);
-                  break;
-                }
-              }
-            } catch (e) {
-              // Continue to next path
-            }
-          }
-          
-          // If not found in common paths, search cache directory recursively
-          if (!foundPath) {
-            const cacheDir = '/opt/render/.cache/puppeteer';
-            if (fs.existsSync(cacheDir)) {
-              console.log(`[Puppeteer] Searching recursively in: ${cacheDir}`);
-              const findChrome = (dir, depth = 0) => {
-                if (depth > 5) return null;
-                try {
-                  const entries = fs.readdirSync(dir, { withFileTypes: true });
-                  for (const entry of entries) {
-                    const fullPath = path.join(dir, entry.name);
-                    if (entry.isDirectory()) {
-                      const found = findChrome(fullPath, depth + 1);
-                      if (found) return found;
-                    } else if (entry.name === 'chrome' && entry.isFile()) {
-                      return fullPath;
-                    }
-                  }
-                } catch (e) {
-                  // Ignore errors
-                }
-                return null;
-              };
-              
-              foundPath = findChrome(cacheDir);
-              if (foundPath) {
-                console.log(`[Puppeteer] Found Chrome by searching: ${foundPath}`);
-              }
-            }
-          }
-          
-          if (foundPath) {
-            launchOptions.executablePath = foundPath;
-          } else {
-            console.log('[Puppeteer] Chrome not found in any standard location');
-            console.log('[Puppeteer] Puppeteer will automatically download Chrome on first use');
-            // Don't set executablePath - let Puppeteer download Chrome automatically
-            // It will use a writable cache directory at runtime
-          }
-        }
+    // For Render.com, configure for cloud environment
+    if (process.env.RENDER || process.env.PUPPETEER_EXECUTABLE_PATH) {
+      // Use provided executable path if set (highest priority)
+      if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+        console.log(`[Puppeteer] Using Chrome from PUPPETEER_EXECUTABLE_PATH: ${launchOptions.executablePath}`);
+      } else if (process.env.RENDER) {
+        // On Render, try multiple locations
+        const fs = require('fs');
+        const path = require('path');
         
-        // Log final executable path
-        if (launchOptions.executablePath) {
-          console.log(`[Puppeteer] Will use Chrome executable: ${launchOptions.executablePath}`);
-        } else {
-          console.log('[Puppeteer] No Chrome executable path set, Puppeteer will download Chrome automatically');
-        }
-      }
-
-      try {
-        this.browser = await puppeteer.launch(launchOptions);
-        this.isInitialized = true;
-        console.log('[Puppeteer] Browser initialized successfully');
-        return this.browser;
-      } catch (launchError) {
-        // If Chrome not found and we're on Render, try to download it automatically
-        if (launchError.message.includes('Could not find Chrome') && process.env.RENDER && !this.chromeUnavailable) {
-          console.log('[Puppeteer] Chrome not found, attempting to download automatically...');
+        console.log('[Puppeteer] Searching for Chrome on Render...');
+        
+        // Priority order: system Chrome > cache directory > home directory
+        const possiblePaths = [
+          '/usr/bin/chromium',           // System-wide Chromium (recommended)
+          '/usr/bin/chromium-browser',   // Alternative system path
+          '/usr/bin/google-chrome',       // Google Chrome if installed
+          '/usr/bin/google-chrome-stable', // Stable Chrome
+          '/opt/render/.cache/puppeteer/chrome/linux-143.0.7499.192/chrome-linux64/chrome', // Build cache
+          process.env.HOME + '/.cache/puppeteer/chrome/linux-143.0.7499.192/chrome-linux64/chrome' // User cache
+        ];
+        
+        let foundPath = null;
+        for (const chromePath of possiblePaths) {
           try {
-            const { execSync } = require('child_process');
-            // Download Chrome using Puppeteer's browser installation
-            execSync('npx puppeteer browsers install chrome', { 
-              stdio: 'inherit',
-              timeout: 300000 // 5 minutes timeout
-            });
-            console.log('[Puppeteer] Chrome downloaded successfully, retrying launch...');
-            // Retry launch without executablePath to use downloaded Chrome
-            delete launchOptions.executablePath;
-            this.browser = await puppeteer.launch(launchOptions);
-            this.isInitialized = true;
-            console.log('[Puppeteer] Browser initialized successfully after auto-download');
-            return this.browser;
-          } catch (downloadError) {
-            console.error('[Puppeteer] Failed to download Chrome automatically:', downloadError.message);
-            this.chromeUnavailable = true;
-            console.error('[Puppeteer] Set DISABLE_PUPPETEER=true to disable Puppeteer features');
-            throw launchError; // Throw original error
+            if (fs.existsSync(chromePath)) {
+              const stats = fs.statSync(chromePath);
+              if (stats.isFile()) {
+                foundPath = chromePath;
+                console.log(`[Puppeteer] Found Chrome at: ${chromePath}`);
+                break;
+              }
+            }
+          } catch (e) {
+            // Continue to next path
           }
         }
         
-        // Log error but don't spam logs - only log once per service instance
-        if (!this.initializationErrorLogged) {
-          console.error('[Puppeteer] Failed to launch browser:', launchError.message);
-          
-          // If Chrome download fails, provide helpful error message
-          if (launchError.message.includes('Could not find Chrome')) {
-            console.error('[Puppeteer] Chrome installation required. Puppeteer will try to download automatically on Render.');
-            console.error('Or set DISABLE_PUPPETEER=true to disable Puppeteer features');
+        // If not found in common paths, search cache directory recursively
+        if (!foundPath) {
+          const cacheDir = '/opt/render/.cache/puppeteer';
+          if (fs.existsSync(cacheDir)) {
+            console.log(`[Puppeteer] Searching recursively in: ${cacheDir}`);
+            const findChrome = (dir, depth = 0) => {
+              if (depth > 5) return null;
+              try {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                  const fullPath = path.join(dir, entry.name);
+                  if (entry.isDirectory()) {
+                    const found = findChrome(fullPath, depth + 1);
+                    if (found) return found;
+                  } else if (entry.name === 'chrome' && entry.isFile()) {
+                    return fullPath;
+                  }
+                }
+              } catch (e) {
+                // Ignore errors
+              }
+              return null;
+            };
+            
+            foundPath = findChrome(cacheDir);
+            if (foundPath) {
+              console.log(`[Puppeteer] Found Chrome by searching: ${foundPath}`);
+            }
           }
-          this.initializationErrorLogged = true;
         }
         
-        throw launchError;
+        if (foundPath) {
+          launchOptions.executablePath = foundPath;
+        } else {
+          console.log('[Puppeteer] Chrome not found in any standard location');
+          console.log('[Puppeteer] Puppeteer will automatically download Chrome on first use');
+          // Don't set executablePath - let Puppeteer download Chrome automatically
+          // It will use a writable cache directory at runtime
+        }
       }
+      
+      // Log final executable path
+      if (launchOptions.executablePath) {
+        console.log(`[Puppeteer] Will use Chrome executable: ${launchOptions.executablePath}`);
+      } else {
+        console.log('[Puppeteer] No Chrome executable path set, Puppeteer will download Chrome automatically');
+      }
+    }
+
+    try {
+      this.browser = await puppeteer.launch(launchOptions);
+      this.isInitialized = true;
+      console.log('[Puppeteer] Browser initialized successfully');
+      return this.browser;
+    } catch (launchError) {
+      // If Chrome not found and we're on Render, try to download it automatically
+      if (launchError.message.includes('Could not find Chrome') && process.env.RENDER && !this.chromeUnavailable) {
+        console.log('[Puppeteer] Chrome not found, attempting to download automatically...');
+        try {
+          const { execSync } = require('child_process');
+          // Download Chrome using Puppeteer's browser installation
+          execSync('npx puppeteer browsers install chrome', { 
+            stdio: 'inherit',
+            timeout: 300000 // 5 minutes timeout
+          });
+          console.log('[Puppeteer] Chrome downloaded successfully, retrying launch...');
+          // Retry launch without executablePath to use downloaded Chrome
+          delete launchOptions.executablePath;
+          this.browser = await puppeteer.launch(launchOptions);
+          this.isInitialized = true;
+          console.log('[Puppeteer] Browser initialized successfully after auto-download');
+          return this.browser;
+        } catch (downloadError) {
+          console.error('[Puppeteer] Failed to download Chrome automatically:', downloadError.message);
+          this.chromeUnavailable = true;
+          console.error('[Puppeteer] Set DISABLE_PUPPETEER=true to disable Puppeteer features');
+          throw launchError; // Throw original error
+        }
+      }
+      
+      // Log error but don't spam logs - only log once per service instance
+      if (!this.initializationErrorLogged) {
+        console.error('[Puppeteer] Failed to launch browser:', launchError.message);
+        
+        // If Chrome download fails, provide helpful error message
+        if (launchError.message.includes('Could not find Chrome')) {
+          console.error('[Puppeteer] Chrome installation required. Puppeteer will try to download automatically on Render.');
+          console.error('Or set DISABLE_PUPPETEER=true to disable Puppeteer features');
+        }
+        this.initializationErrorLogged = true;
+      }
+      
+      throw launchError;
+    }
   }
 
   /**
