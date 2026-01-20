@@ -63,12 +63,30 @@ class HotelImageExtractorService {
         throw new Error('Puppeteer service not available');
       }
 
-      const result = await this.puppeteerService.extractImages(bookingLink);
-      
-      if (result.success) {
-        return result;
-      } else {
-        throw new Error(result.error || 'Failed to extract images');
+      try {
+        const result = await this.puppeteerService.extractImages(bookingLink);
+        
+        if (result.success) {
+          return result;
+        } else {
+          // If Puppeteer fails (e.g., Chrome not installed), return graceful error
+          console.warn(`[ImageExtractor] Puppeteer extraction failed for ${bookingLink}: ${result.error}`);
+          throw new Error(result.error || 'Failed to extract images');
+        }
+      } catch (error) {
+        // If Chrome is not installed, provide helpful error message
+        if (error.message && error.message.includes('Could not find Chrome')) {
+          console.error('[ImageExtractor] Chrome not installed. On Render, add to build command:');
+          console.error('  npx puppeteer browsers install chrome');
+          return {
+            success: false,
+            platform: this.detectPlatform(bookingLink),
+            images: [],
+            primaryImage: null,
+            error: 'Chrome browser not installed. Please install Chrome in the build process.'
+          };
+        }
+        throw error;
       }
 
     } catch (error) {

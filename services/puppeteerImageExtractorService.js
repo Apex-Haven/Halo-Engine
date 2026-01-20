@@ -19,7 +19,8 @@ class PuppeteerImageExtractorService {
     }
 
     try {
-      this.browser = await puppeteer.launch({
+      // Configure for Render.com environment
+      const launchOptions = {
         headless: 'new', // Use new headless mode (better stealth)
         args: [
           '--no-sandbox',
@@ -28,14 +29,40 @@ class PuppeteerImageExtractorService {
           '--disable-accelerated-2d-canvas',
           '--disable-gpu',
           '--window-size=1920,1080',
-          '--disable-blink-features=AutomationControlled' // Hide automation
+          '--disable-blink-features=AutomationControlled', // Hide automation
+          '--single-process', // Required for Render
+          '--disable-software-rasterizer'
         ],
         ignoreHTTPSErrors: true
-      });
+      };
+
+      // For Render.com, configure for cloud environment
+      if (process.env.RENDER || process.env.PUPPETEER_EXECUTABLE_PATH) {
+        // Use provided executable path if set
+        if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+          launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+        }
+        
+        // Set cache directory for Render if provided
+        if (process.env.PUPPETEER_CACHE_DIR) {
+          // Note: cacheDirectory is not a valid launch option, but we log it for reference
+          console.log(`[Puppeteer] Cache directory: ${process.env.PUPPETEER_CACHE_DIR}`);
+        }
+      }
+
+      this.browser = await puppeteer.launch(launchOptions);
       this.isInitialized = true;
       return this.browser;
     } catch (error) {
       console.error('[Puppeteer] Failed to launch browser:', error);
+      
+      // If Chrome download fails, provide helpful error message
+      if (error.message.includes('Could not find Chrome')) {
+        console.error('[Puppeteer] Chrome installation required. On Render, add to build command:');
+        console.error('  npx puppeteer browsers install chrome');
+        console.error('Or set PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false and let Puppeteer download Chrome');
+      }
+      
       throw error;
     }
   }

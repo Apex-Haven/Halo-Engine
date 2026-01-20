@@ -32,7 +32,7 @@ Complete guide for deploying HALO backend to production using Render or Fly.io.
    - **Name**: `halo-backend`
    - **Root Directory**: (leave empty, repo root is the engine)
    - **Environment**: `Node`
-   - **Build Command**: `npm install`
+   - **Build Command**: `npm install && npx puppeteer browsers install chrome`
    - **Start Command**: `npm start`
    - **Plan**: Free (spins down after 15min inactivity)
 
