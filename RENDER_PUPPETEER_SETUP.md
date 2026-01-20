@@ -68,12 +68,18 @@ If Chrome installation keeps failing, you can temporarily disable Puppeteer:
 Add these to your Render environment variables:
 
 ```bash
+# Required: Set Chrome executable path (after Chrome is installed)
+# Get this from build logs: chrome@143.0.7499.192 /opt/render/.cache/puppeteer/chrome/linux-143.0.7499.192/chrome-linux64/chrome
+PUPPETEER_EXECUTABLE_PATH=/opt/render/.cache/puppeteer/chrome/linux-143.0.7499.192/chrome-linux64/chrome
+
 # Optional: Set Puppeteer cache directory
 PUPPETEER_CACHE_DIR=/opt/render/.cache/puppeteer
 
 # Optional: Disable Puppeteer if not needed
 DISABLE_PUPPETEER=false
 ```
+
+**⚠️ IMPORTANT**: After Chrome is installed, copy the path from build logs and set `PUPPETEER_EXECUTABLE_PATH` environment variable in Render.
 
 ## Verify Installation
 
