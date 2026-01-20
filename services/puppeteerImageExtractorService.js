@@ -8,6 +8,8 @@ class PuppeteerImageExtractorService {
   constructor() {
     this.browser = null;
     this.isInitialized = false;
+    this.initializationErrorLogged = false;
+    this.chromeUnavailable = false;
   }
 
   /**
@@ -16,6 +18,11 @@ class PuppeteerImageExtractorService {
   async initializeBrowser() {
     if (this.browser && this.isInitialized) {
       return this.browser;
+    }
+
+    // Check if Puppeteer is disabled via environment variable
+    if (process.env.DISABLE_PUPPETEER === 'true') {
+      throw new Error('Puppeteer is disabled via DISABLE_PUPPETEER environment variable');
     }
 
     try {
@@ -52,15 +59,20 @@ class PuppeteerImageExtractorService {
 
       this.browser = await puppeteer.launch(launchOptions);
       this.isInitialized = true;
+      console.log('[Puppeteer] Browser initialized successfully');
       return this.browser;
     } catch (error) {
-      console.error('[Puppeteer] Failed to launch browser:', error);
-      
-      // If Chrome download fails, provide helpful error message
-      if (error.message.includes('Could not find Chrome')) {
-        console.error('[Puppeteer] Chrome installation required. On Render, add to build command:');
-        console.error('  npx puppeteer browsers install chrome');
-        console.error('Or set PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false and let Puppeteer download Chrome');
+      // Log error but don't spam logs - only log once per service instance
+      if (!this.initializationErrorLogged) {
+        console.error('[Puppeteer] Failed to launch browser:', error.message);
+        
+        // If Chrome download fails, provide helpful error message
+        if (error.message.includes('Could not find Chrome')) {
+          console.error('[Puppeteer] Chrome installation required. On Render, add to build command:');
+          console.error('  npx puppeteer browsers install chrome');
+          console.error('Or set DISABLE_PUPPETEER=true to disable Puppeteer features');
+        }
+        this.initializationErrorLogged = true;
       }
       
       throw error;
@@ -102,8 +114,35 @@ class PuppeteerImageExtractorService {
         throw new Error('Invalid URL format');
       }
 
+      // Check if Chrome is unavailable (from previous failed initialization)
+      if (this.chromeUnavailable) {
+        return {
+          success: false,
+          platform: this.detectPlatform(bookingLink),
+          images: [],
+          primaryImage: null,
+          error: 'Chrome browser not available. Please install Chrome in the build process.'
+        };
+      }
+
       // Initialize browser
-      const browser = await this.initializeBrowser();
+      let browser;
+      try {
+        browser = await this.initializeBrowser();
+      } catch (error) {
+        // If Chrome is not available, mark as unavailable and return graceful error
+        if (error.message && error.message.includes('Could not find Chrome')) {
+          this.chromeUnavailable = true;
+          return {
+            success: false,
+            platform: this.detectPlatform(bookingLink),
+            images: [],
+            primaryImage: null,
+            error: 'Chrome browser not installed. On Render, add to build command: npx puppeteer browsers install chrome'
+          };
+        }
+        throw error;
+      }
       
       // Create new page
       page = await browser.newPage();
