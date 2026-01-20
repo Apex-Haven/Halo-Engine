@@ -35,18 +35,21 @@ Could not find Chrome (ver. 143.0.7499.192)
 npm install && PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false npx puppeteer browsers install chrome@stable
 ```
 
-### Option 2: Use System Chrome (Alternative)
+### Option 2: Install Chrome System-Wide (Recommended for Render)
 
-If Option 1 doesn't work, you can install Chrome system-wide:
+The cache directory doesn't persist on Render's free tier. Install Chrome system-wide instead:
 
 1. Update **Build Command** to:
    ```bash
-   npm install && apt-get update && apt-get install -y chromium-browser
+   npm install && apt-get update && apt-get install -y chromium chromium-sandbox
    ```
-2. Add environment variable:
+2. Add environment variable in Render → Environment:
    ```
-   PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+   PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
    ```
+3. Save and redeploy
+
+**Note**: This installs Chromium system-wide, which persists across deployments.
 
 ### Option 3: Disable Puppeteer Feature (Temporary Workaround)
 
