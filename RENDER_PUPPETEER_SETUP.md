@@ -12,17 +12,28 @@ Could not find Chrome (ver. 143.0.7499.192)
 
 1. Go to your Render dashboard → Your service → Settings → Build & Deploy
 2. Find the **Build Command** field
-3. **Clear the existing command** and enter exactly:
+3. **Clear the existing command completely** (delete everything)
+4. Enter exactly this command (copy-paste):
    ```bash
    npm install && npx puppeteer browsers install chrome
    ```
-   **⚠️ IMPORTANT**: 
-   - Make sure there are no extra spaces or characters
-   - The command should be on a single line
+   **⚠️ CRITICAL**: 
+   - Make sure there are NO extra spaces or characters
+   - The command should be on a SINGLE line
+   - Do NOT add anything after `chrome`
    - Do NOT concatenate with other commands
-   - Copy-paste the exact command above
-4. Click **Save Changes**
-5. Render will automatically redeploy
+   - Verify the command shows: `chromenpm install` = WRONG ❌
+   - Verify the command shows: `chrome` = CORRECT ✅
+5. Click **Save Changes**
+6. Go to **Manual Deploy** → **Deploy latest commit**
+7. Watch the build logs to verify Chrome installation:
+   - Look for: `chrome@<version> <path>` in build logs
+   - If you see errors, Chrome installation failed
+
+**Alternative Build Command** (if above doesn't work):
+```bash
+npm install && PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false npx puppeteer browsers install chrome@stable
+```
 
 ### Option 2: Use System Chrome (Alternative)
 
@@ -37,15 +48,20 @@ If Option 1 doesn't work, you can install Chrome system-wide:
    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
    ```
 
-### Option 3: Disable Puppeteer Feature (Fallback)
+### Option 3: Disable Puppeteer Feature (Temporary Workaround)
 
-If Puppeteer is not critical, you can disable it:
+If Chrome installation keeps failing, you can temporarily disable Puppeteer:
 
-1. Add environment variable:
+1. Go to Render dashboard → Your service → Environment
+2. Add environment variable:
    ```
    DISABLE_PUPPETEER=true
    ```
-2. The service will gracefully handle missing Puppeteer
+3. Save and redeploy
+4. The service will gracefully handle missing Puppeteer
+5. Image extraction will return empty results but won't error
+
+**Note**: This is a temporary workaround. Image extraction won't work, but the rest of the app will function normally.
 
 ## Environment Variables
 
