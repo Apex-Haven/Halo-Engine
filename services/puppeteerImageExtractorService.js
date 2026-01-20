@@ -131,26 +131,51 @@ class PuppeteerImageExtractorService {
         }
       }
 
-      this.browser = await puppeteer.launch(launchOptions);
-      this.isInitialized = true;
-      console.log('[Puppeteer] Browser initialized successfully');
-      return this.browser;
-    } catch (error) {
-      // Log error but don't spam logs - only log once per service instance
-      if (!this.initializationErrorLogged) {
-        console.error('[Puppeteer] Failed to launch browser:', error.message);
-        
-        // If Chrome download fails, provide helpful error message
-        if (error.message.includes('Could not find Chrome')) {
-          console.error('[Puppeteer] Chrome installation required. On Render, add to build command:');
-          console.error('  npx puppeteer browsers install chrome');
-          console.error('Or set DISABLE_PUPPETEER=true to disable Puppeteer features');
+      try {
+        this.browser = await puppeteer.launch(launchOptions);
+        this.isInitialized = true;
+        console.log('[Puppeteer] Browser initialized successfully');
+        return this.browser;
+      } catch (launchError) {
+        // If Chrome not found and we're on Render, try to download it automatically
+        if (launchError.message.includes('Could not find Chrome') && process.env.RENDER && !this.chromeUnavailable) {
+          console.log('[Puppeteer] Chrome not found, attempting to download automatically...');
+          try {
+            const { execSync } = require('child_process');
+            // Download Chrome using Puppeteer's browser installation
+            execSync('npx puppeteer browsers install chrome', { 
+              stdio: 'inherit',
+              timeout: 300000 // 5 minutes timeout
+            });
+            console.log('[Puppeteer] Chrome downloaded successfully, retrying launch...');
+            // Retry launch without executablePath to use downloaded Chrome
+            delete launchOptions.executablePath;
+            this.browser = await puppeteer.launch(launchOptions);
+            this.isInitialized = true;
+            console.log('[Puppeteer] Browser initialized successfully after auto-download');
+            return this.browser;
+          } catch (downloadError) {
+            console.error('[Puppeteer] Failed to download Chrome automatically:', downloadError.message);
+            this.chromeUnavailable = true;
+            console.error('[Puppeteer] Set DISABLE_PUPPETEER=true to disable Puppeteer features');
+            throw launchError; // Throw original error
+          }
         }
-        this.initializationErrorLogged = true;
+        
+        // Log error but don't spam logs - only log once per service instance
+        if (!this.initializationErrorLogged) {
+          console.error('[Puppeteer] Failed to launch browser:', launchError.message);
+          
+          // If Chrome download fails, provide helpful error message
+          if (launchError.message.includes('Could not find Chrome')) {
+            console.error('[Puppeteer] Chrome installation required. Puppeteer will try to download automatically on Render.');
+            console.error('Or set DISABLE_PUPPETEER=true to disable Puppeteer features');
+          }
+          this.initializationErrorLogged = true;
+        }
+        
+        throw launchError;
       }
-      
-      throw error;
-    }
   }
 
   /**
