@@ -31,6 +31,8 @@ const userSchema = new mongoose.Schema({
       'ADMIN', 
       'OPERATIONS_MANAGER',
       'VENDOR_MANAGER',
+      'VENDOR',
+      'CLIENT',
       'DRIVER',
       'CUSTOMER'
     ],
@@ -220,6 +222,14 @@ userSchema.methods.generateAuthToken = function() {
 };
 
 userSchema.methods.incrementLoginAttempts = function() {
+  // Skip account locking if disabled via environment variable
+  if (process.env.DISABLE_ACCOUNT_LOCK === 'true') {
+    // Still track attempts but don't lock
+    return this.updateOne({
+      $inc: { loginAttempts: 1 }
+    });
+  }
+  
   // If we have a previous lock that has expired, restart at 1
   if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({

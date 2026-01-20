@@ -95,10 +95,11 @@ const generalLimiter = createRateLimiter({
 
 /**
  * Strict rate limiter for authentication endpoints
+ * Can be disabled by setting DISABLE_AUTH_RATE_LIMIT=true or AUTH_RATE_LIMIT_DISABLED=true
  */
-const authLimiter = createRateLimiter({
-  windowMs: parseInt(process.env.AUTH_RATE_LIMIT_WINDOW) || 15 * 60 * 1000,
-  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX) || 5, // 5 login attempts per 15 minutes
+const authRateLimiter = createRateLimiter({
+  windowMs: parseInt(process.env.AUTH_RATE_LIMIT_WINDOW) || 5 * 60 * 1000, // 5 minutes
+  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX) || 5, // 5 login attempts per 5 minutes
   message: 'Too many authentication attempts, please try again later.',
   skipSuccessfulRequests: true, // Don't count successful logins
   onLimitReached: async (req, res) => {
@@ -113,6 +114,16 @@ const authLimiter = createRateLimiter({
     );
   }
 });
+
+// Check if auth rate limiting is disabled
+const isAuthRateLimitDisabled = process.env.DISABLE_AUTH_RATE_LIMIT === 'true' || 
+                                 process.env.AUTH_RATE_LIMIT_DISABLED === 'true' ||
+                                 process.env.AUTH_RATE_LIMIT_MAX === '0';
+
+// Export conditional rate limiter: disabled = no-op middleware, enabled = actual limiter
+const authLimiter = isAuthRateLimitDisabled 
+  ? (req, res, next) => next() // No-op middleware when disabled
+  : authRateLimiter;
 
 /**
  * Strict rate limiter for registration endpoints

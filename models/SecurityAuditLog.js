@@ -14,6 +14,7 @@ const securityAuditLogSchema = new mongoose.Schema({
       'permission_denied',
       'sensitive_data_accessed',
       'brute_force_attack',
+      'brute_force_attempt',
       'rate_limit_exceeded',
       'suspicious_activity',
       'api_access',
@@ -41,6 +42,8 @@ const securityAuditLogSchema = new mongoose.Schema({
       'ADMIN',
       'OPERATIONS_MANAGER',
       'VENDOR_MANAGER',
+      'VENDOR',
+      'CLIENT',
       'DRIVER',
       'CUSTOMER'
     ],

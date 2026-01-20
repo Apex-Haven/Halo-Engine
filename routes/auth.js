@@ -146,8 +146,8 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
-    // Check if account is locked
-    if (user.isLocked) {
+    // Check if account is locked (can be disabled via DISABLE_ACCOUNT_LOCK env var)
+    if (process.env.DISABLE_ACCOUNT_LOCK !== 'true' && user.isLocked) {
       return res.status(423).json({
         success: false,
         message: 'Account is temporarily locked due to too many failed login attempts'
@@ -166,7 +166,10 @@ router.post('/login', authLimiter, async (req, res) => {
     const isPasswordValid = await user.comparePassword(password);
     
     if (!isPasswordValid) {
-      await user.incrementLoginAttempts();
+      // Only increment login attempts if account locking is enabled
+      if (process.env.DISABLE_ACCOUNT_LOCK !== 'true') {
+        await user.incrementLoginAttempts();
+      }
       await logAuthEvent(req, 'login_failure', 'failure', { email });
       return res.status(401).json({
         success: false,

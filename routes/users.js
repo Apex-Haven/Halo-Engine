@@ -309,7 +309,7 @@ router.post('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, 
       userData.vendorDetails = vendorDetails;
     }
 
-    const user = new UserModel(userData);
+    const user = new User(userData);
     await user.save();
 
     // Return user without password
