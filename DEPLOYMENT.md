@@ -35,6 +35,12 @@ Complete guide for deploying HALO backend to production using Render or Fly.io.
    - **Build Command**: `npm install && npx puppeteer browsers install chrome`
    - **Start Command**: `npm start`
    - **Plan**: Free (spins down after 15min inactivity)
+   
+   **⚠️ IMPORTANT**: Make sure the Build Command is exactly:
+   ```
+   npm install && npx puppeteer browsers install chrome
+   ```
+   Do NOT add extra text or concatenate commands incorrectly.
 
 5. Add Environment Variables (see `env.example`):
    ```bash

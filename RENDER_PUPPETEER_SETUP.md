@@ -10,12 +10,19 @@ Could not find Chrome (ver. 143.0.7499.192)
 
 ### Option 1: Install Chrome During Build (Recommended)
 
-1. Go to your Render dashboard → Your service → Settings
-2. Update the **Build Command** to:
+1. Go to your Render dashboard → Your service → Settings → Build & Deploy
+2. Find the **Build Command** field
+3. **Clear the existing command** and enter exactly:
    ```bash
    npm install && npx puppeteer browsers install chrome
    ```
-3. Save and redeploy
+   **⚠️ IMPORTANT**: 
+   - Make sure there are no extra spaces or characters
+   - The command should be on a single line
+   - Do NOT concatenate with other commands
+   - Copy-paste the exact command above
+4. Click **Save Changes**
+5. Render will automatically redeploy
 
 ### Option 2: Use System Chrome (Alternative)
 
