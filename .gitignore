@@ -64,3 +64,4 @@ Thumbs.db
 # Node.js binaries (if included)
 node-v*/
 *.tar.gz
+mongodb-backup/
