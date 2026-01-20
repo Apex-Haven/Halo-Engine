@@ -150,7 +150,10 @@ class PuppeteerImageExtractorService {
       return this.browser;
     } catch (launchError) {
       // If Chrome not found and we're on Render, try to download it automatically
-      if (launchError.message.includes('Could not find Chrome') && process.env.RENDER && !this.chromeUnavailable) {
+      const chromeNotFound = launchError.message.includes('Could not find Chrome') || 
+                            launchError.message.includes('Browser was not found at the configured executablePath');
+      
+      if (chromeNotFound && process.env.RENDER && !this.chromeUnavailable) {
         console.log('[Puppeteer] Chrome not found, attempting to download automatically...');
         try {
           const { execSync } = require('child_process');
