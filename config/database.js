@@ -11,7 +11,8 @@ const connectDB = async () => {
   }
 
   // Check if MONGODB_URI is pointing to localhost (won't work in production/cluster)
-  if (process.env.MONGODB_URI.includes('localhost') || process.env.MONGODB_URI.includes('127.0.0.1')) {
+  // Allow localhost in development mode
+  if ((process.env.MONGODB_URI.includes('localhost') || process.env.MONGODB_URI.includes('127.0.0.1')) && process.env.NODE_ENV === 'production') {
     console.error('❌ MONGODB_URI is set to localhost, which will not work in a cluster/production environment.');
     console.error('❌ Please set MONGODB_URI to a remote MongoDB instance (e.g., MongoDB Atlas).');
     console.error('📝 Example: MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/halo?retryWrites=true&w=majority');

@@ -486,28 +486,18 @@ const generateRecommendations = async (req, res) => {
       recommendationsCount: result.recommendations?.length || 0
     });
 
-    // Ensure we always have recommendations to return
+    // Log detailed information about the result
     if (!result.recommendations || result.recommendations.length === 0) {
-      console.warn('⚠️ No recommendations in result, generating fallback...');
-      // Generate fallback recommendations
-      const fallbackHotels = await travelAdvisoryService.generateFallbackHotels(preference);
-      const fallbackRecommendations = fallbackHotels.map((hotel, index) => ({
-        hotelId: hotel.hotelId,
-        hotel: hotel,
-        relevanceScore: 100 - (index * 10), // Decreasing scores
-        priceMatch: 100,
-        amenitiesMatch: 100,
-        starRatingMatch: true,
-        distanceFromConference: null,
-        distanceFromTargetArea: 0,
-        withinConferenceRadius: false,
-        bookingLinks: {},
-        prices: {},
-        card: null,
-        cozyCozyId: null
-      }));
-      result.recommendations = fallbackRecommendations;
-      result.recommendationsGenerated = fallbackRecommendations.length;
+      console.warn('⚠️ No recommendations in result from API');
+      console.warn('📊 Result details:', {
+        success: result.success,
+        totalHotelsFound: result.totalHotelsFound,
+        recommendationsGenerated: result.recommendationsGenerated,
+        hasRecommendations: !!result.recommendations,
+        recommendationsLength: result.recommendations?.length || 0
+      });
+      // Don't generate fallback - return empty recommendations
+      // The user wants real API data only
     }
 
     // Save recommendations to preference (include booking links and cards)
@@ -586,27 +576,15 @@ const generateRecommendations = async (req, res) => {
     console.log('✅ Returning', enhancedRecommendations.length, 'recommendations');
     console.log('📋 Sample recommendation structure:', JSON.stringify(enhancedRecommendations[0] || {}, null, 2).substring(0, 500));
 
-    // Ensure we always return recommendations, even if empty array
+    // Log if we still have no recommendations
     if (enhancedRecommendations.length === 0) {
-      console.error('❌ CRITICAL: Still no recommendations after all fallbacks!');
-      // Last resort - create minimal recommendations
-      const lastResortHotels = await travelAdvisoryService.generateFallbackHotels(preference);
-      enhancedRecommendations.push(...lastResortHotels.map((hotel, idx) => ({
-        hotelId: hotel.hotelId,
-        hotel: hotel,
-        relevanceScore: 100 - (idx * 10),
-        priceMatch: 100,
-        amenitiesMatch: 100,
-        starRatingMatch: true,
-        distanceFromConference: null,
-        distanceFromTargetArea: 0,
-        withinConferenceRadius: false,
-        bookingLinks: {},
-        prices: {},
-        card: null,
-        cozyCozyId: null
-      })));
-      console.log('🆘 Last resort: Generated', enhancedRecommendations.length, 'recommendations');
+      console.error('❌ No recommendations to return. Check RapidAPI configuration and response.');
+      console.error('📊 Debug info:', {
+        totalHotelsFound: result.totalHotelsFound,
+        recommendationsFromService: result.recommendations?.length || 0,
+        preferenceId: preference._id,
+        searchCity: preference.targetAreas?.[0] || preference.country
+      });
     }
 
     res.json({

@@ -1,7 +1,5 @@
 const Hotel = require('../models/Hotel');
-const hotelSearchService = require('./hotelSearchService');
-const cozyCozyService = require('./cozyCozyService');
-const cozyCozyParser = require('./cozyCozyParserService');
+const rapidApiHotelService = require('./rapidApiHotelService');
 const hotelCardService = require('./hotelCardService');
 const HotelLink = require('../models/HotelLink');
 
@@ -45,71 +43,58 @@ class TravelAdvisoryService {
       console.log(`🏨 Found ${hotels.length} hotels from search`);
 
       if (hotels.length === 0) {
-        console.warn('⚠️ No hotels found from any source. Generating fallback mock hotels...');
-        // Generate fallback mock hotels to ensure we always have results
-        const fallbackHotels = await this.generateFallbackHotels(preferences);
-        hotels.push(...fallbackHotels);
-        console.log(`✅ Generated ${fallbackHotels.length} fallback mock hotels`);
+        console.warn('⚠️ No hotels found from RapidAPI or database. Please check your RapidAPI configuration.');
+        // Don't generate mock hotels - return empty results instead
       }
 
-      // Step 2: Filter and score hotels
-      const scoredHotels = await this.scoreAndFilterHotels(hotels, preferences);
-      console.log(`📊 Scored ${scoredHotels.length} hotels (after filtering)`);
-
-      if (scoredHotels.length === 0) {
-        console.warn('⚠️ All hotels filtered out by scoring. Lowering threshold...');
-        // Try with lower threshold
-        const allScored = [];
-        for (const hotel of hotels) {
-          const scores = {
-            priceMatch: this.calculatePriceMatch(hotel, preferences),
-            amenitiesMatch: this.calculateAmenitiesMatch(hotel, preferences),
-            starRatingMatch: this.calculateStarRatingMatch(hotel, preferences),
-            locationMatch: await this.calculateLocationMatch(hotel, preferences),
-            conferenceProximity: this.calculateConferenceProximity(hotel, preferences)
-          };
-          const relevanceScore = this.calculateRelevanceScore(scores, preferences);
-          
-          // Accept all hotels
-          if (relevanceScore >= 0) {
-            const bookingLinks = hotel.bookingLinks || {};
-            const prices = hotel.prices || {};
-            const card = hotel.card || (hotel.cozyCozyId ? hotelCardService.buildCard(hotel) : null);
-            
-            allScored.push({
-              hotelId: hotel._id || hotel.hotelId,
-              hotel: hotel,
-              relevanceScore: Math.round(relevanceScore * 100) / 100,
-              priceMatch: Math.round(scores.priceMatch * 100) / 100,
-              amenitiesMatch: Math.round(scores.amenitiesMatch * 100) / 100,
-              starRatingMatch: scores.starRatingMatch,
-              distanceFromConference: scores.conferenceProximity.distance,
-              distanceFromTargetArea: scores.locationMatch.distance,
-              withinConferenceRadius: scores.conferenceProximity.withinRadius,
-              scores: scores,
-              bookingLinks: bookingLinks,
-              prices: prices,
-              card: card,
-              cozyCozyId: hotel.cozyCozyId
-            });
-          }
+      // Step 2: Skip scoring - just return all hotels directly
+      console.log(`📊 Returning ${hotels.length} hotels directly (scoring disabled)`);
+      
+      // Format hotels as recommendations without any scoring
+      const recommendations = hotels.map((hotel, index) => {
+        // Extract booking links from hotel sources or bookingLinks
+        const bookingLinks = hotel.bookingLinks || {};
+        if (hotel.sources && hotel.sources.length > 0) {
+          hotel.sources.forEach(source => {
+            if (source.url && source.url !== '#') {
+              bookingLinks[source.platform] = source.url;
+            }
+          });
         }
-        scoredHotels.push(...allScored);
-        console.log(`📊 After lowering threshold: ${scoredHotels.length} hotels`);
-      }
+        
+        // Ensure we have at least the Agoda link
+        if (!bookingLinks.agoda && hotel.sources?.[0]?.url) {
+          bookingLinks.agoda = hotel.sources[0].url;
+        }
+        
+        return {
+          hotelId: hotel._id || hotel.hotelId,
+          hotel: hotel,
+          relevanceScore: 50,
+          priceMatch: 50,
+          amenitiesMatch: 100,
+          starRatingMatch: true,
+          distanceFromConference: null,
+          distanceFromTargetArea: null,
+          withinConferenceRadius: true,
+          scores: {},
+          bookingLinks: bookingLinks,
+          prices: hotel.pricing ? {
+            basePrice: hotel.pricing.basePrice,
+            currency: hotel.pricing.currency,
+            discount: hotel.pricing.discount || 0
+          } : {},
+          card: hotel.card || null
+        };
+      });
 
-      // Step 3: Sort by relevance score
-      scoredHotels.sort((a, b) => b.relevanceScore - a.relevanceScore);
-
-      // Step 4: Limit to top recommendations (e.g., top 20)
-      const topRecommendations = scoredHotels.slice(0, 20);
-      console.log(`✅ Generated ${topRecommendations.length} recommendations`);
+      console.log(`✅ Generated ${recommendations.length} recommendations (no scoring)`);
 
       return {
         success: true,
         totalHotelsFound: hotels.length,
-        recommendationsGenerated: topRecommendations.length,
-        recommendations: topRecommendations,
+        recommendationsGenerated: recommendations.length,
+        recommendations: recommendations,
         generatedAt: new Date()
       };
     } catch (error) {
@@ -139,60 +124,57 @@ class TravelAdvisoryService {
         maxDistanceFromConference: preferences.maxDistanceFromConference || 10
       };
 
-      // Try CozyCozy first if enabled
-      let cozyCozyHotels = [];
-      if (process.env.COZYCOZY_ENABLED !== 'false') {
-        try {
-          console.log('🔍 Searching CozyCozy for:', searchCity);
-          cozyCozyHotels = await this.searchCozyCozyHotels(preferences, searchCity);
-          console.log(`✅ Found ${cozyCozyHotels.length} hotels from CozyCozy`);
-        } catch (error) {
-          console.error('❌ CozyCozy search error:', error.message);
-          console.error('Stack:', error.stack);
-          // Fallback to existing service
-        }
-      } else {
-        console.log('ℹ️ CozyCozy is disabled');
-      }
+      // Search hotels using RapidAPI
+      console.log('🔍 Searching RapidAPI for hotels in:', searchCity);
+      const allHotels = [];
+      
+      // Build RapidAPI filters
+      const rapidApiFilters = {
+        checkInDate: preferences.checkInDate,
+        checkOutDate: preferences.checkOutDate,
+        adults: 2,
+        rooms: 1,
+        minPrice: filters.minPrice,
+        maxPrice: filters.maxPrice,
+        minStarRating: filters.minStarRating,
+        currency: preferences.currency || 'INR'
+      };
 
-      // Search hotels using existing hotel search service
-      console.log('🔍 Searching existing hotel search service for:', searchCity);
-      const searchResults = await hotelSearchService.searchHotels(searchCity, filters);
-      console.log(`✅ Found ${searchResults.hotels?.length || 0} hotels from existing service`);
+      // Search primary city
+      const rapidApiResults = await rapidApiHotelService.searchHotels(searchCity, rapidApiFilters);
+      if (rapidApiResults.hotels && rapidApiResults.hotels.length > 0) {
+        console.log(`✅ Found ${rapidApiResults.hotels.length} hotels from RapidAPI for ${searchCity}`);
+        allHotels.push(...rapidApiResults.hotels);
+      }
 
       // If we have multiple target areas, search in each
       if (preferences.targetAreas && preferences.targetAreas.length > 1) {
         console.log(`🔍 Searching additional areas: ${preferences.targetAreas.slice(1).join(', ')}`);
         const additionalSearches = await Promise.all(
           preferences.targetAreas.slice(1).map(area => 
-            hotelSearchService.searchHotels(area, filters)
+            rapidApiHotelService.searchHotels(area, rapidApiFilters)
           )
         );
 
         // Merge results
         additionalSearches.forEach((result, index) => {
-          if (result.hotels) {
-            console.log(`✅ Found ${result.hotels.length} hotels from ${preferences.targetAreas[index + 1]}`);
-            searchResults.hotels.push(...result.hotels);
+          if (result.hotels && result.hotels.length > 0) {
+            console.log(`✅ Found ${result.hotels.length} hotels from RapidAPI for ${preferences.targetAreas[index + 1]}`);
+            allHotels.push(...result.hotels);
           }
         });
       }
 
-      // Also search in database for stored hotels
+      // Also search in database for stored hotels (as backup)
       console.log('🔍 Searching database for hotels');
       const dbHotels = await this.searchDatabaseHotels(preferences, filters);
       if (dbHotels.length > 0) {
         console.log(`✅ Found ${dbHotels.length} hotels from database`);
-        searchResults.hotels.push(...dbHotels);
-      }
-
-      // Combine CozyCozy results with existing results
-      if (cozyCozyHotels.length > 0) {
-        searchResults.hotels.push(...cozyCozyHotels);
+        allHotels.push(...dbHotels);
       }
 
       // Remove duplicates
-      const uniqueHotels = this.deduplicateHotels(searchResults.hotels || []);
+      const uniqueHotels = this.deduplicateHotels(allHotels);
       console.log(`✅ Total unique hotels after deduplication: ${uniqueHotels.length}`);
 
       return uniqueHotels;
@@ -257,8 +239,22 @@ class TravelAdvisoryService {
   async scoreAndFilterHotels(hotels, preferences) {
     const scoredHotels = [];
     console.log(`📊 Scoring ${hotels.length} hotels...`);
+    
+    if (hotels.length === 0) {
+      console.warn('⚠️ No hotels to score!');
+      return [];
+    }
 
-    for (const hotel of hotels) {
+    for (let i = 0; i < hotels.length; i++) {
+      const hotel = hotels[i];
+      try {
+        if (!hotel) {
+          console.warn(`⚠️ Hotel at index ${i} is null/undefined, skipping`);
+          continue;
+        }
+        
+        console.log(`📊 Processing hotel ${i + 1}/${hotels.length}: ${hotel.name || 'Unknown'}`);
+        
       const scores = {
         priceMatch: this.calculatePriceMatch(hotel, preferences),
         amenitiesMatch: this.calculateAmenitiesMatch(hotel, preferences),
@@ -268,25 +264,41 @@ class TravelAdvisoryService {
       };
 
       // Calculate overall relevance score (weighted average)
-      const relevanceScore = this.calculateRelevanceScore(scores, preferences);
+      let relevanceScore = this.calculateRelevanceScore(scores, preferences);
+      
+      // Ensure relevanceScore is a valid number
+      if (isNaN(relevanceScore) || relevanceScore === null || relevanceScore === undefined) {
+        console.warn(`⚠️ Invalid relevance score for hotel ${hotel.name}, defaulting to 50`);
+        relevanceScore = 50; // Default score if calculation fails
+      }
 
-      // Log first hotel for debugging
-      if (scoredHotels.length === 0) {
-        console.log(`📊 Sample hotel scoring:`, {
+      // Log first few hotels for debugging
+      if (scoredHotels.length < 3) {
+        console.log(`📊 Hotel scoring [${scoredHotels.length}]:`, {
           name: hotel.name,
+          city: hotel.city,
           price: hotel.pricing?.basePrice,
-          scores,
+          currency: hotel.pricing?.currency,
+          scores: {
+            priceMatch: Math.round(scores.priceMatch * 100) / 100,
+            amenitiesMatch: Math.round(scores.amenitiesMatch * 100) / 100,
+            starRatingMatch: scores.starRatingMatch,
+            locationMatch: Math.round(scores.locationMatch.score * 100) / 100,
+            conferenceProximity: Math.round(scores.conferenceProximity.score * 100) / 100
+          },
           relevanceScore: Math.round(relevanceScore * 100) / 100
         });
       }
 
       // Only include hotels that meet minimum criteria
       // Very low threshold to ensure we get results (can be adjusted later)
-      if (relevanceScore >= 0) { // Accept all hotels for now
+      // Accept all hotels with relevanceScore >= 0 (which should be all hotels)
+      // Also accept if relevanceScore is a valid number (even if negative, we'll include it)
+      if (typeof relevanceScore === 'number' && !isNaN(relevanceScore) && relevanceScore >= 0) {
         // Get booking links and card if available
         const bookingLinks = hotel.bookingLinks || {};
         const prices = hotel.prices || {};
-        const card = hotel.card || (hotel.cozyCozyId ? hotelCardService.buildCard(hotel) : null);
+        const card = hotel.card || null;
 
         scoredHotels.push({
           hotelId: hotel._id || hotel.hotelId,
@@ -299,14 +311,59 @@ class TravelAdvisoryService {
           distanceFromTargetArea: scores.locationMatch.distance,
           withinConferenceRadius: scores.conferenceProximity.withinRadius,
           scores: scores,
-          // Add CozyCozy data
           bookingLinks: bookingLinks,
           prices: prices,
-          card: card,
-          cozyCozyId: hotel.cozyCozyId
+          card: card
+        });
+      } else {
+        // Log why a hotel was filtered out (shouldn't happen with current scoring)
+        console.warn(`⚠️ Hotel filtered out: ${hotel.name}, relevanceScore: ${relevanceScore} (type: ${typeof relevanceScore})`);
+        // Safety net: include hotel anyway if it has basic data
+        if (hotel.name && hotel.pricing?.basePrice !== undefined) {
+          console.log(`🔄 Including hotel anyway as safety net: ${hotel.name}`);
+          const bookingLinks = hotel.bookingLinks || {};
+          const prices = hotel.prices || {};
+          const card = hotel.card || null;
+          
+          scoredHotels.push({
+            hotelId: hotel._id || hotel.hotelId,
+            hotel: hotel,
+            relevanceScore: 50, // Default score
+            priceMatch: Math.round(scores.priceMatch * 100) / 100,
+            amenitiesMatch: Math.round(scores.amenitiesMatch * 100) / 100,
+            starRatingMatch: scores.starRatingMatch,
+            distanceFromConference: scores.conferenceProximity.distance,
+            distanceFromTargetArea: scores.locationMatch.distance,
+            withinConferenceRadius: scores.conferenceProximity.withinRadius,
+            scores: scores,
+            bookingLinks: bookingLinks,
+            prices: prices,
+            card: card
+          });
+        }
+      }
+      } catch (error) {
+        console.error(`❌ Error scoring hotel ${hotel.name || hotel.hotelId}:`, error.message);
+        // Include hotel anyway with default score
+        scoredHotels.push({
+          hotelId: hotel._id || hotel.hotelId,
+          hotel: hotel,
+          relevanceScore: 50,
+          priceMatch: 50,
+          amenitiesMatch: 100,
+          starRatingMatch: true,
+          distanceFromConference: null,
+          distanceFromTargetArea: null,
+          withinConferenceRadius: true,
+          scores: {},
+          bookingLinks: hotel.bookingLinks || {},
+          prices: hotel.prices || {},
+          card: hotel.card || null
         });
       }
     }
+    
+    console.log(`✅ Finished scoring: ${scoredHotels.length} hotels included out of ${hotels.length} total`);
 
     return scoredHotels;
   }
@@ -385,15 +442,26 @@ class TravelAdvisoryService {
     }
 
     const hotelCoords = hotel.location?.coordinates;
-    if (!hotelCoords || !hotelCoords.latitude || !hotelCoords.longitude) {
-      return { score: 50, distance: null }; // Unknown location
-    }
-
-    // For now, we'll use a simple scoring based on city match
-    // In a full implementation, you'd geocode target areas and calculate distances
     const hotelCity = (hotel.city || '').toUpperCase();
     const targetAreasUpper = preferences.targetAreas.map(area => area.toUpperCase());
 
+    // If we have coordinates, try to calculate actual distance
+    if (hotelCoords && hotelCoords.latitude && hotelCoords.longitude) {
+      // For now, if we have coordinates, give a reasonable score
+      // In a full implementation, you'd geocode target areas and calculate distances
+      const hasCityMatch = targetAreasUpper.some(area => 
+        hotelCity.includes(area) || area.includes(hotelCity) || hotelCity === area
+      );
+      
+      if (hasCityMatch) {
+        return { score: 100, distance: 0 };
+      }
+      
+      // Even without city match, if we have coordinates, give a decent score
+      return { score: 60, distance: null };
+    }
+
+    // No coordinates - use city matching
     if (targetAreasUpper.includes(hotelCity)) {
       return { score: 100, distance: 0 };
     }
@@ -403,9 +471,18 @@ class TravelAdvisoryService {
       hotelCity.includes(area) || area.includes(hotelCity)
     );
 
-    return partialMatch 
-      ? { score: 70, distance: 5 } // Estimated 5km
-      : { score: 40, distance: 20 }; // Estimated 20km
+    // More lenient scoring - even if city doesn't match exactly, give some score
+    if (partialMatch) {
+      return { score: 70, distance: 5 }; // Estimated 5km
+    }
+    
+    // If city is "UNKNOWN" or empty, but we have coordinates, still give a score
+    if ((!hotelCity || hotelCity === 'UNKNOWN') && hotelCoords) {
+      return { score: 60, distance: null };
+    }
+    
+    // Default: give a lower but non-zero score to avoid filtering out all hotels
+    return { score: 50, distance: 20 }; // Estimated 20km
   }
 
   /**
@@ -492,7 +569,15 @@ class TravelAdvisoryService {
     }
 
     // Normalize to 0-100
-    return totalWeight > 0 ? totalScore / totalWeight : 0;
+    const finalScore = totalWeight > 0 ? totalScore / totalWeight : 50; // Default to 50 if no weights
+    
+    // Ensure we return a valid number between 0-100
+    if (isNaN(finalScore) || finalScore === null || finalScore === undefined) {
+      console.warn('⚠️ calculateRelevanceScore returned invalid value, defaulting to 50');
+      return 50;
+    }
+    
+    return Math.max(0, Math.min(100, finalScore)); // Clamp between 0-100
   }
 
   /**
@@ -564,260 +649,21 @@ class TravelAdvisoryService {
   }
 
   /**
-   * Generate fallback mock hotels when no hotels are found
+   * @deprecated - No longer generating mock hotels
+   * This method is kept for backward compatibility but returns empty array
    */
   async generateFallbackHotels(preferences) {
-    const searchCity = preferences.targetAreas && preferences.targetAreas.length > 0
-      ? preferences.targetAreas[0]
-      : preferences.country;
-    
-    const minPrice = preferences.budgetMin || 20000;
-    const maxPrice = preferences.budgetMax || 30000;
-    const budgetMid = (minPrice + maxPrice) / 2;
-    
-    // Get approximate coordinates for the location
-    const baseCoords = this.getApproximateCoordinates(preferences.country, searchCity);
-
-    return [
-      {
-        hotelId: `HTL${Date.now()}1`,
-        name: 'Luxury Grand Hotel',
-        city: searchCity.toUpperCase(),
-        starRating: 5,
-        rating: {
-          score: 9.2,
-          reviews: 1520,
-          platform: 'combined'
-        },
-        pricing: {
-          basePrice: Math.round(budgetMid * 1.1),
-          currency: preferences.currency || 'INR',
-          discount: 15,
-          taxIncluded: false
-        },
-        amenities: {
-          wifi: true,
-          pool: true,
-          gym: true,
-          restaurant: true,
-          spa: true,
-          parking: true
-        },
-        images: [
-          { url: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&h=600&fit=crop' }
-        ],
-        location: {
-          address: `123 Main Street, ${searchCity}`,
-          coordinates: { 
-            latitude: baseCoords.latitude + (Math.random() - 0.5) * 0.1, 
-            longitude: baseCoords.longitude + (Math.random() - 0.5) * 0.1 
-          }
-        },
-        sources: [{
-          platform: 'mock',
-          url: '#',
-          lastChecked: new Date(),
-          price: Math.round(budgetMid * 1.1),
-          available: true
-        }]
-      },
-      {
-        hotelId: `HTL${Date.now()}2`,
-        name: 'Premium Business Hotel',
-        city: searchCity.toUpperCase(),
-        starRating: 4,
-        rating: {
-          score: 8.5,
-          reviews: 1200,
-          platform: 'combined'
-        },
-        pricing: {
-          basePrice: Math.round(budgetMid),
-          currency: preferences.currency || 'INR',
-          discount: 10,
-          taxIncluded: false
-        },
-        amenities: {
-          wifi: true,
-          pool: true,
-          gym: true,
-          restaurant: true,
-          parking: true,
-          businessCenter: true
-        },
-        images: [
-          { url: 'https://images.unsplash.com/photo-1551882547-ff40c63fe5fa?w=800&h=600&fit=crop' }
-        ],
-        location: {
-          address: `456 Business Road, ${searchCity}`,
-          coordinates: { 
-            latitude: baseCoords.latitude + (Math.random() - 0.5) * 0.1, 
-            longitude: baseCoords.longitude + (Math.random() - 0.5) * 0.1 
-          }
-        },
-        sources: [{
-          platform: 'mock',
-          url: '#',
-          lastChecked: new Date(),
-          price: Math.round(budgetMid),
-          available: true
-        }]
-      },
-      {
-        hotelId: `HTL${Date.now()}3`,
-        name: 'Comfort Inn Express',
-        city: searchCity.toUpperCase(),
-        starRating: 3,
-        rating: {
-          score: 7.8,
-          reviews: 890,
-          platform: 'combined'
-        },
-        pricing: {
-          basePrice: Math.round(budgetMid * 0.9),
-          currency: preferences.currency || 'INR',
-          discount: 12,
-          taxIncluded: false
-        },
-        amenities: {
-          wifi: true,
-          parking: true,
-          restaurant: true
-        },
-        images: [
-          { url: 'https://images.unsplash.com/photo-1571896349842-33c89424de2d?w=800&h=600&fit=crop' }
-        ],
-        location: {
-          address: `789 Comfort Lane, ${searchCity}`,
-          coordinates: { 
-            latitude: baseCoords.latitude + (Math.random() - 0.5) * 0.1, 
-            longitude: baseCoords.longitude + (Math.random() - 0.5) * 0.1 
-          }
-        },
-        sources: [{
-          platform: 'mock',
-          url: '#',
-          lastChecked: new Date(),
-          price: Math.round(budgetMid * 0.9),
-          available: true
-        }]
-      }
-    ];
+    console.warn('⚠️ generateFallbackHotels is deprecated. Use RapidAPI for real hotel data.');
+    return [];
   }
 
   /**
-   * Search hotels using CozyCozy API
-   * @param {Object} preferences - Client preferences
-   * @param {string} searchCity - City to search
-   * @returns {Promise<Array>} Array of hotels with booking links
+   * @deprecated - CozyCozy is no longer supported
+   * Use RapidAPI for hotel search instead
    */
   async searchCozyCozyHotels(preferences, searchCity) {
-    try {
-      const checkInDate = preferences.checkInDate 
-        ? (preferences.checkInDate instanceof Date 
-          ? preferences.checkInDate 
-          : new Date(preferences.checkInDate))
-        : new Date();
-      
-      const checkOutDate = preferences.checkOutDate
-        ? (preferences.checkOutDate instanceof Date
-          ? preferences.checkOutDate
-          : new Date(preferences.checkOutDate))
-        : new Date(Date.now() + 24 * 60 * 60 * 1000); // Default 1 night
-
-      // Search CozyCozy
-      const cozyCozyResults = await cozyCozyService.searchByLocation(
-        searchCity,
-        checkInDate,
-        checkOutDate,
-        {
-          guests: 2,
-          limit: 40,
-          filters: {
-            priceRange: [preferences.budgetMin || 0, preferences.budgetMax || Infinity],
-            minRating: preferences.preferredStarRating || 0,
-            starRatings: preferences.preferredStarRating ? [preferences.preferredStarRating] : [],
-            amenities: preferences.requiredAmenities || [],
-            sorting: 'ranking'
-          }
-        }
-      );
-
-      console.log(`📊 CozyCozy searchByLocation returned ${cozyCozyResults.length} hotels`);
-
-      // cozyCozyResults is already an array of parsed hotels from searchByLocation
-      // Build hotel cards directly
-      const hotelsWithCards = cozyCozyResults.map(hotel => {
-        const card = hotelCardService.buildCard(hotel);
-        return {
-          ...hotel,
-          card,
-          bookingLinks: hotel.bookingLinks || {},
-          prices: hotel.prices || {}
-        };
-      });
-
-      // Store in database for caching
-      await this.storeHotelLinks(hotelsWithCards);
-
-      return hotelsWithCards;
-    } catch (error) {
-      console.error('Error searching CozyCozy hotels:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Store hotel links in database
-   * @param {Array} hotels - Hotels with booking links
-   */
-  async storeHotelLinks(hotels) {
-    try {
-      for (const hotel of hotels) {
-        if (!hotel.cozyCozyId) continue;
-
-        // Check if already exists
-        let hotelLink = await HotelLink.findByCozyCozyId(hotel.cozyCozyId);
-        
-        if (!hotelLink) {
-          hotelLink = new HotelLink({
-            cozyCozyId: hotel.cozyCozyId,
-            hotelName: hotel.name,
-            address: hotel.address,
-            city: hotel.city,
-            country: hotel.country,
-            coordinates: hotel.coordinates,
-            source: 'cozycozy'
-          });
-        }
-
-        // Update booking links
-        if (hotel.bookingLinks) {
-          for (const [platform, url] of Object.entries(hotel.bookingLinks)) {
-            hotelLink.addBookingLink(platform, url);
-          }
-        }
-
-        // Update prices
-        if (hotel.prices) {
-          for (const [platform, priceData] of Object.entries(hotel.prices)) {
-            const amount = typeof priceData === 'object' ? priceData.amount : priceData;
-            const currency = typeof priceData === 'object' ? priceData.currency : 'USD';
-            hotelLink.addPrice(platform, amount, currency);
-          }
-        }
-
-        // Update card data
-        if (hotel.card) {
-          hotelLink.cardData = hotel.card.cardData;
-          hotelLink.cardHtml = hotel.card.cardHtml;
-        }
-
-        await hotelLink.save();
-      }
-    } catch (error) {
-      console.error('Error storing hotel links:', error);
-    }
+    console.warn('⚠️ searchCozyCozyHotels is deprecated. Use RapidAPI instead.');
+    return [];
   }
 }
 

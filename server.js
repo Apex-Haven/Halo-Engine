@@ -28,6 +28,7 @@ const driverRoutes = require('./routes/drivers');
 const flightIntegrationRoutes = require('./routes/flightIntegration');
 const hotelRoutes = require('./routes/hotels');
 const travelAdvisoryRoutes = require('./routes/travelAdvisory');
+const hotelPdfRoutes = require('./routes/hotelPdf');
 
 // Import services
 const cronService = require('./services/cronService');
@@ -164,6 +165,7 @@ app.use('/api/drivers', driverRoutes);
 app.use('/api/flight-integration', flightIntegrationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/travel-advisory', travelAdvisoryRoutes);
+app.use('/api/hotel-pdf', hotelPdfRoutes);
 
 // API routes (without /api prefix - for cluster/reverse proxy compatibility)
 // This allows routes to work when:
@@ -184,6 +186,7 @@ app.use('/drivers', driverRoutes);
 app.use('/flight-integration', flightIntegrationRoutes);
 app.use('/hotels', hotelRoutes);
 app.use('/travel-advisory', travelAdvisoryRoutes);
+app.use('/hotel-pdf', hotelPdfRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
