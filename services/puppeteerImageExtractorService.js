@@ -44,11 +44,24 @@ class PuppeteerImageExtractorService {
 
     // For Render.com, configure for cloud environment
     if (process.env.RENDER || process.env.PUPPETEER_EXECUTABLE_PATH) {
+      const fs = require('fs');
+      
       // Use provided executable path if set (highest priority)
       if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-        console.log(`[Puppeteer] Using Chrome from PUPPETEER_EXECUTABLE_PATH: ${launchOptions.executablePath}`);
-      } else if (process.env.RENDER) {
+        const configuredPath = process.env.PUPPETEER_EXECUTABLE_PATH;
+        // Verify the path actually exists
+        if (fs.existsSync(configuredPath)) {
+          launchOptions.executablePath = configuredPath;
+          console.log(`[Puppeteer] Using Chrome from PUPPETEER_EXECUTABLE_PATH: ${configuredPath}`);
+        } else {
+          console.warn(`[Puppeteer] PUPPETEER_EXECUTABLE_PATH is set to ${configuredPath} but file doesn't exist`);
+          console.log('[Puppeteer] Will search for Chrome or download automatically');
+          // Don't set executablePath - let it search or download
+        }
+      }
+      
+      // If executablePath not set yet, search for Chrome
+      if (!launchOptions.executablePath && process.env.RENDER) {
         // On Render, try multiple locations
         const fs = require('fs');
         const path = require('path');
