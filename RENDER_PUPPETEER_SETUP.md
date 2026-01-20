@@ -35,21 +35,23 @@ Could not find Chrome (ver. 143.0.7499.192)
 npm install && PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false npx puppeteer browsers install chrome@stable
 ```
 
-### Option 2: Install Chrome System-Wide (Recommended for Render)
+### Option 2: Auto-Download Chrome at Runtime (Recommended for Render)
 
-The cache directory doesn't persist on Render's free tier. Install Chrome system-wide instead:
+Render's build environment is read-only, so we can't use `apt-get`. Instead, let Puppeteer download Chrome automatically at runtime:
 
-1. Update **Build Command** to:
+1. **Build Command** should be:
    ```bash
-   npm install && apt-get update && apt-get install -y chromium chromium-sandbox
+   npm install
    ```
-2. Add environment variable in Render → Environment:
-   ```
-   PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-   ```
+   (No Chrome installation needed - Puppeteer will download it automatically)
+
+2. **No environment variables needed** - Puppeteer will handle Chrome download automatically
+
 3. Save and redeploy
 
-**Note**: This installs Chromium system-wide, which persists across deployments.
+**How it works**: On first use, Puppeteer will automatically download Chrome to a writable cache directory. This happens automatically when the service tries to extract images.
+
+**Note**: The first image extraction request may take longer (~30-60 seconds) as Chrome downloads. Subsequent requests will be fast.
 
 ### Option 3: Disable Puppeteer Feature (Temporary Workaround)
 

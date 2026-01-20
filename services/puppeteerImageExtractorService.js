@@ -117,7 +117,9 @@ class PuppeteerImageExtractorService {
             launchOptions.executablePath = foundPath;
           } else {
             console.log('[Puppeteer] Chrome not found in any standard location');
-            console.log('[Puppeteer] Please install Chrome system-wide or set PUPPETEER_EXECUTABLE_PATH');
+            console.log('[Puppeteer] Puppeteer will automatically download Chrome on first use');
+            // Don't set executablePath - let Puppeteer download Chrome automatically
+            // It will use a writable cache directory at runtime
           }
         }
         
@@ -125,7 +127,7 @@ class PuppeteerImageExtractorService {
         if (launchOptions.executablePath) {
           console.log(`[Puppeteer] Will use Chrome executable: ${launchOptions.executablePath}`);
         } else {
-          console.log('[Puppeteer] No Chrome executable path set, Puppeteer will try to find/download Chrome');
+          console.log('[Puppeteer] No Chrome executable path set, Puppeteer will download Chrome automatically');
         }
       }
 
