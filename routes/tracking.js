@@ -9,7 +9,7 @@ const {
 } = require('../controllers/trackingController');
 
 // Import validation middleware
-const { validateApexId } = require('../middleware/validation');
+const { validateApexId, validateTrackingId } = require('../middleware/validation');
 
 // Import authentication middleware
 const { optionalAuth } = require('../middleware/auth');
@@ -18,8 +18,9 @@ const { optionalAuth } = require('../middleware/auth');
  * @route   GET /api/tracking/:id
  * @desc    Get transfer details for tracking (public access)
  * @access  Public (no authentication required for tracking)
+ * @note    Accepts both Apex ID (APX123456) or traveler/customer name
  */
-router.get('/:id', validateApexId, getTransferForTracking);
+router.get('/:id', validateTrackingId, getTransferForTracking);
 
 /**
  * @route   PUT /api/tracking/:id/location

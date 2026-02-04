@@ -86,12 +86,12 @@ router.get('/:id', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), 
 
 /**
  * @route   POST /api/drivers
- * @desc    Create driver (VENDOR role only)
- * @access  Private (VENDOR role only)
+ * @desc    Create driver (VENDOR, SUPER_ADMIN, ADMIN roles)
+ * @access  Private (VENDOR, SUPER_ADMIN, ADMIN roles)
  */
-router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
+router.post('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const { username, email, password, profile, preferences, driverDetails } = req.body;
+    const { username, email, password, profile, preferences, driverDetails, vendorId } = req.body;
 
     // Validate required fields
     if (!username || !email || !password || !profile?.firstName || !profile?.lastName) {
@@ -100,7 +100,6 @@ router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
         message: 'Missing required fields: username, email, password, firstName, lastName'
       });
     }
-
 
     // Check if user already exists
     const existingUser = await User.findOne({
@@ -114,6 +113,23 @@ router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
       });
     }
 
+    // Determine vendorId based on user role
+    let finalVendorId = req.user._id.toString();
+    let finalCreatedBy = req.user._id;
+
+    // If admin provided vendorId, validate and use it
+    if ((req.user.role === 'SUPER_ADMIN' || req.user.role === 'ADMIN') && vendorId) {
+      const vendor = await User.findById(vendorId);
+      if (!vendor || vendor.role !== 'VENDOR') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid vendorId. The provided ID does not correspond to a VENDOR user.'
+        });
+      }
+      finalVendorId = vendorId;
+      finalCreatedBy = vendorId;
+    }
+
     // Generate driver ID
     const driverId = `DRV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -123,14 +139,14 @@ router.post('/', authenticate, authorize(['VENDOR']), async (req, res) => {
       email,
       password,
       role: 'DRIVER',
-      vendorId: req.user._id.toString(),
+      vendorId: finalVendorId,
       driverId: driverId,
       profile: {
         firstName: profile.firstName,
         lastName: profile.lastName,
         phone: profile.phone || ''
       },
-      createdBy: req.user._id,
+      createdBy: finalCreatedBy,
       driverDetails: driverDetails || {
         licenseNumber: '',
         vehicleType: '',
@@ -324,15 +340,27 @@ router.get('/:driverId/assigned-clients', authenticate, authorize(['VENDOR', 'SU
       });
     }
 
+    // Check if vendorId exists before querying
+    if (!driver.vendorId) {
+      console.warn(`Driver ${driverId} has no vendorId assigned (orphaned driver)`);
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+
     // Get vendor and their assigned clients
     const vendor = await User.findById(driver.vendorId)
       .select('assignedClients')
       .populate('assignedClients', 'username email profile.firstName profile.lastName');
 
     if (!vendor) {
-      return res.status(404).json({
-        success: false,
-        message: 'Vendor not found'
+      // Log warning for orphaned driver (driver with missing vendor)
+      console.warn(`Driver ${driverId} references non-existent vendor ${driver.vendorId} (orphaned driver)`);
+      // Return empty array instead of error to prevent UI disruption
+      return res.json({
+        success: true,
+        data: []
       });
     }
 

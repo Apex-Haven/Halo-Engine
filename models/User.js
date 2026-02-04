@@ -34,6 +34,7 @@ const userSchema = new mongoose.Schema({
       'VENDOR',
       'CLIENT',
       'DRIVER',
+      'TRAVELER',
       'CUSTOMER'
     ],
     default: 'CUSTOMER'

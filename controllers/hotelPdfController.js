@@ -9,6 +9,8 @@ const imageExtractor = new HotelImageExtractorService();
  * Body: { links: string[] }
  */
 const extractHotelImages = async (req, res) => {
+  let timeoutId = null;
+  
   try {
     const { links } = req.body;
 
@@ -64,8 +66,28 @@ const extractHotelImages = async (req, res) => {
       });
     }
 
-    // Extract images
-    const results = await imageExtractor.extractImagesBatch(links);
+    // Set a timeout for the entire operation (2 minutes per link, max 5 minutes total)
+    const timeout = Math.min(links.length * 120000, 300000); // 2 min per link, max 5 min
+    timeoutId = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(504).json({
+          success: false,
+          message: 'Image extraction timed out. The operation took too long.',
+          error: 'Request timeout after 5 minutes'
+        });
+      }
+    }, timeout);
+
+    // Extract images with timeout protection
+    const extractionPromise = imageExtractor.extractImagesBatch(links);
+    const results = await Promise.race([
+      extractionPromise,
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Image extraction timed out')), timeout - 1000)
+      )
+    ]);
+
+    if (timeoutId) clearTimeout(timeoutId);
 
     // Format response
     const response = {
@@ -82,7 +104,18 @@ const extractHotelImages = async (req, res) => {
 
     res.json(response);
   } catch (error) {
+    clearTimeout(timeoutId);
     console.error('Error extracting hotel images:', error);
+    
+    // If timeout occurred, return specific message
+    if (error.message && error.message.includes('timeout')) {
+      return res.status(504).json({
+        success: false,
+        message: 'Image extraction timed out. Some sites may take longer to load.',
+        error: error.message
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Failed to extract hotel images',

@@ -5,92 +5,112 @@ const mongoose = require('mongoose');
 // Get transfer by ID for tracking
 const getTransferForTracking = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id, searchType } = req.params;
+    let transfer = null;
     
-    // Normalize the ID to uppercase (APX IDs are uppercase)
-    const normalizedId = id.toUpperCase();
-    
-    // Use database - search by _id (which is the APX ID like APX123456)
-    // Try exact match first
-    let transfer = await Transfer.findById(normalizedId);
-    console.log(`🔍 First attempt (findById): ${transfer ? '✅ Found' : '❌ Not found'}`);
-    
-    // If not found, try searching without case sensitivity
-    if (!transfer) {
-      try {
-        // MongoDB string fields are case-sensitive, but let's try a case-insensitive search
-        const allTransfers = await Transfer.find({}).select('_id').limit(100).lean();
-        console.log(`📋 Found ${allTransfers.length} transfers in database`);
-        
-        if (allTransfers.length > 0) {
-          console.log(`🔎 Sample IDs:`, allTransfers.slice(0, 10).map(t => t._id).join(', '));
+    // If search type is 'id', search by Apex ID
+    if (searchType === 'id') {
+      // Normalize the ID to uppercase (APX IDs are uppercase)
+      const normalizedId = id.toUpperCase();
+      
+      // Use database - search by _id (which is the APX ID like APX123456)
+      // Try exact match first
+      transfer = await Transfer.findById(normalizedId);
+      console.log(`🔍 First attempt (findById): ${transfer ? '✅ Found' : '❌ Not found'}`);
+      
+      // If not found, try searching without case sensitivity
+      if (!transfer) {
+        try {
+          // MongoDB string fields are case-sensitive, but let's try a case-insensitive search
+          const allTransfers = await Transfer.find({}).select('_id').limit(100).lean();
+          console.log(`📋 Found ${allTransfers.length} transfers in database`);
           
-          // Try to find a case-insensitive match
-          const matched = allTransfers.find(t => 
-            t._id.toUpperCase() === normalizedId || 
-            t._id === normalizedId ||
-            t._id.toLowerCase() === normalizedId.toLowerCase()
-          );
-          
-          if (matched) {
-            console.log(`✅ Found case-insensitive match: ${matched._id}`);
-            transfer = await Transfer.findById(matched._id);
+          if (allTransfers.length > 0) {
+            console.log(`🔎 Sample IDs:`, allTransfers.slice(0, 10).map(t => t._id).join(', '));
+            
+            // Try to find a case-insensitive match
+            const matched = allTransfers.find(t => 
+              t._id.toUpperCase() === normalizedId || 
+              t._id === normalizedId ||
+              t._id.toLowerCase() === normalizedId.toLowerCase()
+            );
+            
+            if (matched) {
+              console.log(`✅ Found case-insensitive match: ${matched._id}`);
+              transfer = await Transfer.findById(matched._id);
+            }
           }
-        }
-      } catch (searchError) {
-        console.error('Search error:', searchError);
-      }
-    }
-    
-    // If still not found, try to find by any variation of the ID
-    if (!transfer) {
-      // Remove leading zeros or try different formats
-      const digits = normalizedId.replace(/^APX/i, '');
-      if (digits) {
-        // Try with leading zeros
-        const paddedDigits = digits.padStart(6, '0');
-        const paddedId = `APX${paddedDigits}`;
-        console.log(`🔍 Trying padded version: ${paddedId}`);
-        transfer = await Transfer.findById(paddedId);
-        
-        // Also try without padding (if original had padding)
-        if (!transfer && digits.length === 6) {
-          const unpaddedDigits = digits.replace(/^0+/, '');
-          if (unpaddedDigits !== digits) {
-            const unpaddedId = `APX${unpaddedDigits}`;
-            console.log(`🔍 Trying unpadded version: ${unpaddedId}`);
-            transfer = await Transfer.findById(unpaddedId);
-          }
+        } catch (searchError) {
+          console.error('Search error:', searchError);
         }
       }
-    }
-    
-    // Debug: Log what we found
-    if (transfer) {
-      console.log(`✅ Found transfer: ${transfer._id}`);
-    } else {
-      // Log available transfers for debugging
-      try {
-        const count = await Transfer.countDocuments({});
-        const sampleIds = await Transfer.find({}).select('_id').limit(10).lean();
+      
+      // If still not found, try to find by any variation of the ID
+      if (!transfer) {
+        // Remove leading zeros or try different formats
+        const digits = normalizedId.replace(/^APX/i, '');
+        if (digits) {
+          // Try with leading zeros
+          const paddedDigits = digits.padStart(6, '0');
+          const paddedId = `APX${paddedDigits}`;
+          console.log(`🔍 Trying padded version: ${paddedId}`);
+          transfer = await Transfer.findById(paddedId);
+          
+          // Also try without padding (if original had padding)
+          if (!transfer && digits.length === 6) {
+            const unpaddedDigits = digits.replace(/^0+/, '');
+            if (unpaddedDigits !== digits) {
+              const unpaddedId = `APX${unpaddedDigits}`;
+              console.log(`🔍 Trying unpadded version: ${unpaddedId}`);
+              transfer = await Transfer.findById(unpaddedId);
+            }
+          }
+        }
+      }
+      
+      // Debug: Log what we found
+      if (transfer) {
+        console.log(`✅ Found transfer by ID: ${transfer._id}`);
+      } else {
         console.log(`❌ Transfer lookup failed for ID: ${normalizedId}`);
-        console.log(`📊 Total transfers in database: ${count}`);
-        if (sampleIds.length > 0) {
-          console.log(`📋 Sample transfer IDs:`, sampleIds.map(t => t._id).join(', '));
-        } else {
-          console.log(`⚠️ No transfers found in database`);
-        }
-      } catch (debugError) {
-        console.error('Error during debug logging:', debugError);
+      }
+    } else {
+      // Search by name (traveler or customer name)
+      const searchName = id.trim();
+      console.log(`🔍 Searching by name: ${searchName}`);
+      
+      // Search for transfers matching traveler name or customer name
+      const transfers = await Transfer.find({
+        $or: [
+          { 'traveler_details.name': { $regex: searchName, $options: 'i' } },
+          { 'customer_details.name': { $regex: searchName, $options: 'i' } }
+        ]
+      }).limit(10);
+      
+      if (transfers.length === 0) {
+        console.log(`❌ No transfers found for name: ${searchName}`);
+      } else if (transfers.length === 1) {
+        // Exact match - use it
+        transfer = transfers[0];
+        console.log(`✅ Found single transfer by name: ${transfer._id}`);
+      } else {
+        // Multiple matches - return the most recent one
+        transfer = transfers.sort((a, b) => 
+          new Date(b.createdAt || b.create_time) - new Date(a.createdAt || a.create_time)
+        )[0];
+        console.log(`✅ Found ${transfers.length} transfers, using most recent: ${transfer._id}`);
       }
     }
     
     if (!transfer) {
+      const searchTerm = searchType === 'id' ? id.toUpperCase() : id;
       return res.status(404).json({
         success: false,
-        message: `Transfer with ID ${normalizedId} not found. Please check your tracking ID and try again.`,
-        searchedId: normalizedId,
-        suggestion: 'Make sure the APX ID is correct and the transfer was created successfully.'
+        message: `Transfer not found. Please check your ${searchType === 'id' ? 'Apex ID' : 'name'} and try again.`,
+        searchedTerm: searchTerm,
+        suggestion: searchType === 'id' 
+          ? 'Make sure the APX ID is correct and the transfer was created successfully.'
+          : 'Try using your full name as it appears in the booking, or use your Apex ID instead.'
       });
     }
 

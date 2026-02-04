@@ -289,10 +289,13 @@ class PuppeteerImageExtractorService {
         'Upgrade-Insecure-Requests': '1'
       });
 
-      // Navigate to page
+      // Navigate to page with longer timeout for TripAdvisor
+      const detectedPlatform = this.detectPlatform(bookingLink);
+      const navigationTimeout = detectedPlatform === 'tripadvisor' ? 60000 : 30000; // 60s for TripAdvisor, 30s for others
+      
       await page.goto(bookingLink, {
         waitUntil: 'networkidle2', // Wait for network to be idle
-        timeout: 30000 // 30 second timeout
+        timeout: navigationTimeout
       });
 
       // Get final URL after redirects
@@ -322,13 +325,19 @@ class PuppeteerImageExtractorService {
       // Wait for page to be fully loaded (using Promise instead of deprecated waitForTimeout)
       await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds for lazy-loaded images
 
-      // Wait for specific selectors if they exist (Booking.com)
+      // Wait for specific selectors if they exist (Booking.com, TripAdvisor, etc.)
       const selectorsToWait = [
         '#photo_wrapper',
         '#hotel_main_content',
         '[data-testid="GalleryUnifiedDesktop-wrapper"]',
+        '.media-viewer',
+        '.gallery',
+        '[data-testid="gallery"]',
+        '.photoContainer',
         'picture img',
-        'img[src*="cf.bstatic.com"]'
+        'img[src*="cf.bstatic.com"]',
+        'img[src*="media-cdn.tripadvisor.com"]',
+        'img[src*="dynamic-media-cdn.tripadvisor.com"]'
       ];
 
       let foundSelector = null;
@@ -418,44 +427,109 @@ class PuppeteerImageExtractorService {
         return images; // Return empty if challenge not resolved
       }
       
-      // Booking.com selectors (priority order)
-      const selectors = [
-        '#photo_wrapper img',
-        '#hotel_main_content img',
-        '#photo_wrapper picture img',
-        '#hotel_main_content picture img',
-        '[data-testid="GalleryUnifiedDesktop-wrapper"] img',
-        '[data-testid="GalleryUnifiedDesktop-wrapper"] picture img',
-        'picture.b7a691c583 img',
-        'picture img[src*="cf.bstatic.com"]',
-        'img[src*="cf.bstatic.com"]',
-        'img[src*="xdata/images/hotel"]'
-      ];
+      // Platform-specific selectors
+      let selectors = [];
+      
+      if (platform === 'tripadvisor') {
+        // TripAdvisor-specific selectors
+        selectors = [
+          '.media-viewer img',
+          '.gallery img',
+          '[data-testid="gallery"] img',
+          '.photoContainer img',
+          '.media-viewer picture img',
+          '.gallery picture img',
+          'img[src*="media-cdn.tripadvisor.com"]',
+          'img[src*="dynamic-media-cdn.tripadvisor.com"]',
+          'img[data-lazy-src*="tripadvisor.com"]',
+          '.prw_rup img',
+          '.photoContainer picture img',
+          'img[class*="photo"]',
+          '.media-viewer [data-testid="gallery-image"] img'
+        ];
+      } else if (platform === 'booking') {
+        // Booking.com selectors (priority order)
+        selectors = [
+          '#photo_wrapper img',
+          '#hotel_main_content img',
+          '#photo_wrapper picture img',
+          '#hotel_main_content picture img',
+          '[data-testid="GalleryUnifiedDesktop-wrapper"] img',
+          '[data-testid="GalleryUnifiedDesktop-wrapper"] picture img',
+          'picture.b7a691c583 img',
+          'picture img[src*="cf.bstatic.com"]',
+          'img[src*="cf.bstatic.com"]',
+          'img[src*="xdata/images/hotel"]'
+        ];
+      } else {
+        // Generic selectors for other platforms
+        selectors = [
+          'img[src*="cf.bstatic.com"]',
+          'img[src*="media-cdn.tripadvisor.com"]',
+          'img[src*="dynamic-media-cdn.tripadvisor.com"]',
+          '.gallery img',
+          '.photo img',
+          'picture img',
+          'img[data-src]',
+          'img[data-lazy-src]'
+        ];
+      }
       
       for (const selector of selectors) {
         const elements = document.querySelectorAll(selector);
         
         if (elements.length > 0) {
           elements.forEach((img) => {
-            const src = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy') || img.getAttribute('data-original');
+            const src = img.src || 
+                       img.getAttribute('data-src') || 
+                       img.getAttribute('data-lazy-src') || 
+                       img.getAttribute('data-lazy') || 
+                       img.getAttribute('data-original') ||
+                       img.getAttribute('srcset')?.split(',')[0]?.trim().split(' ')[0];
+            
             if (src) {
               // Decode HTML entities
               const decodedSrc = src.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
               
-              // Validate image URL
-              const isValid = decodedSrc.includes('cf.bstatic.com') || 
-                            decodedSrc.includes('/images/hotel/') ||
-                            decodedSrc.includes('/xdata/images/') ||
-                            /\.(jpg|jpeg|png|webp|gif)/i.test(decodedSrc);
+              // Validate image URL based on platform
+              let isValid = false;
+              
+              if (platform === 'tripadvisor') {
+                isValid = decodedSrc.includes('tripadvisor.com') || 
+                         decodedSrc.includes('media-cdn.tripadvisor.com') ||
+                         decodedSrc.includes('dynamic-media-cdn.tripadvisor.com') ||
+                         /\.(jpg|jpeg|png|webp|gif)/i.test(decodedSrc);
+              } else if (platform === 'booking') {
+                isValid = decodedSrc.includes('cf.bstatic.com') || 
+                         decodedSrc.includes('/images/hotel/') ||
+                         decodedSrc.includes('/xdata/images/') ||
+                         /\.(jpg|jpeg|png|webp|gif)/i.test(decodedSrc);
+              } else {
+                // Generic validation
+                isValid = /\.(jpg|jpeg|png|webp|gif)/i.test(decodedSrc) ||
+                         decodedSrc.includes('cdn') ||
+                         decodedSrc.includes('media');
+              }
               
               if (isValid && !images.includes(decodedSrc)) {
                 // Upgrade image quality if possible
                 let finalUrl = decodedSrc;
+                
+                // Booking.com quality upgrades
                 if (finalUrl.includes('max300')) {
                   finalUrl = finalUrl.replace('max300', 'max1024x768');
                 } else if (finalUrl.includes('max500')) {
                   finalUrl = finalUrl.replace('max500', 'max1024x768');
                 }
+                
+                // TripAdvisor quality upgrades (common patterns)
+                if (finalUrl.includes('photo-o')) {
+                  // Try to get larger version
+                  finalUrl = finalUrl.replace('photo-o', 'photo-l');
+                } else if (finalUrl.includes('photo-m')) {
+                  finalUrl = finalUrl.replace('photo-m', 'photo-l');
+                }
+                
                 images.push(finalUrl);
               }
             }
@@ -489,6 +563,7 @@ class PuppeteerImageExtractorService {
     
     const lowerUrl = url.toLowerCase();
     if (lowerUrl.includes('booking.com')) return 'booking';
+    if (lowerUrl.includes('tripadvisor.com')) return 'tripadvisor';
     if (lowerUrl.includes('agoda.com')) return 'agoda';
     if (lowerUrl.includes('makemytrip.com')) return 'makemytrip';
     if (lowerUrl.includes('goibibo.com')) return 'goibibo';

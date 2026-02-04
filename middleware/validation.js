@@ -720,6 +720,38 @@ const validateApexId = (req, res, next) => {
   next();
 };
 
+// Flexible validation for tracking - accepts both APX ID or name
+const validateTrackingId = (req, res, next) => {
+  const id = req.params.id;
+  
+  if (!id || !id.trim()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Tracking ID or name is required',
+      error: 'Please provide either an Apex ID (APX123456) or traveler/customer name'
+    });
+  }
+  
+  // Store original for potential name search
+  req.params.originalId = id.trim();
+  
+  // Check if it's an APX ID format
+  const normalizedId = id.toUpperCase().trim();
+  const apexIdPattern = /^APX\d{4,6}$/;
+  
+  if (apexIdPattern.test(normalizedId)) {
+    // It's an APX ID - normalize it
+    req.params.id = normalizedId;
+    req.params.searchType = 'id';
+  } else {
+    // It's likely a name - keep original case for search
+    req.params.id = id.trim();
+    req.params.searchType = 'name';
+  }
+  
+  next();
+};
+
 const validateFlightNumber = (req, res, next) => {
   const { error } = commonSchemas.flightNumber.validate(req.params.flight_no);
   
@@ -761,6 +793,7 @@ module.exports = {
   validateVendorAssignment,
   validateQueryParams,
   validateApexId,
+  validateTrackingId,
   validateFlightNumber,
   validateVendorId,
   commonSchemas,

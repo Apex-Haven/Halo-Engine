@@ -86,7 +86,7 @@ router.get('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), 
  */
 router.post('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const { username, email, password, profile, preferences } = req.body;
+    const { username, email, password, profile, preferences, clientId } = req.body;
 
     // Validate required fields
     if (!username || !email || !password || !profile?.firstName || !profile?.lastName) {
@@ -108,6 +108,21 @@ router.post('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), as
       });
     }
 
+    // Determine createdBy: use clientId if provided (for admins), otherwise use req.user._id
+    let createdByUserId = req.user._id;
+    
+    // If admin provided a clientId, validate it and use it
+    if (clientId && (req.user.role === 'SUPER_ADMIN' || req.user.role === 'ADMIN')) {
+      const client = await User.findById(clientId);
+      if (!client || client.role !== 'CLIENT') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid client ID provided'
+        });
+      }
+      createdByUserId = clientId;
+    }
+
     // Create traveler
     const traveler = new User({
       username,
@@ -119,7 +134,7 @@ router.post('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), as
         lastName: profile.lastName,
         phone: profile.phone || ''
       },
-      createdBy: req.user._id,
+      createdBy: createdByUserId,
       preferences: preferences || {
         notifications: {
           email: true,
