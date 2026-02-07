@@ -146,9 +146,40 @@ const searchFlights = async (req, res) => {
   }
 };
 
+const getFlightsByRegion = async (req, res) => {
+  try {
+    const { lamin, lomin, lamax, lomax } = req.query;
+    
+    // Default to India bounding box if not provided
+    const minLat = parseFloat(lamin) || 8;
+    const minLon = parseFloat(lomin) || 68;
+    const maxLat = parseFloat(lamax) || 37;
+    const maxLon = parseFloat(lomax) || 97;
+
+    console.log(`🌍 Fetching flights in region: ${minLat}, ${minLon} to ${maxLat}, ${maxLon}`);
+    
+    const flights = await flightTrackingService.getFlightsByRegion(minLat, minLon, maxLat, maxLon);
+    
+    res.json({
+      success: true,
+      data: flights,
+      count: flights.length,
+      message: `Found ${flights.length} active flights in region`
+    });
+  } catch (error) {
+    console.error('Region flights error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch flights by region',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getFlightInfo,
   getAirportInfo,
   getFlightStatus,
-  searchFlights
+  searchFlights,
+  getFlightsByRegion
 };

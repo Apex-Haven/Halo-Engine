@@ -173,7 +173,7 @@ const vendorDetailsSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    maxlength: 20
+    maxlength: 24 // MongoDB ObjectId is 24 characters
   },
   vendor_name: {
     type: String,
@@ -204,7 +204,7 @@ const assignedDriverDetailsSchema = new mongoose.Schema({
   driver_id: {
     type: String,
     trim: true,
-    maxlength: 20
+    maxlength: 24 // MongoDB ObjectId is 24 characters
   },
   name: {
     type: String,

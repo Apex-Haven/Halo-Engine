@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { authenticate, authorize } = require('../middleware/auth');
+const googleSheetsSyncService = require('../services/googleSheetsSyncService');
 
 /**
  * @route   GET /api/travelers
@@ -34,6 +35,102 @@ router.get('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), asy
       success: false,
       message: 'Failed to fetch travelers',
       error: error.message
+    });
+  }
+});
+
+/**
+ * @route   GET /api/travelers/export
+ * @desc    Export travelers to Excel
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN)
+ */
+router.get('/export', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+  try {
+    let XLSX;
+    try {
+      XLSX = require('xlsx');
+    } catch (requireError) {
+      console.error('Failed to require xlsx module:', requireError);
+      return res.status(500).json({
+        success: false,
+        message: 'Excel export functionality is not available. Please install the xlsx package: npm install xlsx',
+        error: 'xlsx module not found'
+      });
+    }
+    
+    const User = require('../models/User');
+
+    // Build query based on user role
+    let query = { role: 'TRAVELER' };
+    
+    // CLIENT users can only export their own travelers
+    if (req.user.role === 'CLIENT') {
+      query.createdBy = req.user._id;
+    }
+
+    // Fetch travelers
+    const travelers = await User.find(query)
+      .select('username email profile preferences createdBy')
+      .populate('createdBy', 'username email profile vendorDetails companyName')
+      .sort({ createdAt: -1 });
+
+    if (travelers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No travelers found to export'
+      });
+    }
+
+    // Prepare data for Excel
+    const excelData = travelers.map(traveler => ({
+      'First Name': traveler.profile?.firstName || '',
+      'Last Name': traveler.profile?.lastName || '',
+      'Email': traveler.email || '',
+      'Phone': traveler.profile?.phone || '',
+      'Username': traveler.username || '',
+      'Client': traveler.createdBy?.vendorDetails?.companyName || 
+                traveler.createdBy?.companyName || 
+                (traveler.createdBy?.profile?.firstName && traveler.createdBy?.profile?.lastName 
+                  ? `${traveler.createdBy.profile.firstName} ${traveler.createdBy.profile.lastName}`.trim()
+                  : traveler.createdBy?.username || traveler.createdBy?.email || 'Unassigned'),
+      'Created At': traveler.createdAt ? new Date(traveler.createdAt).toLocaleString() : ''
+    }));
+
+    // Create workbook and worksheet
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Travelers');
+
+    // Set column widths
+    const columnWidths = [
+      { wch: 15 }, // First Name
+      { wch: 15 }, // Last Name
+      { wch: 30 }, // Email
+      { wch: 18 }, // Phone
+      { wch: 20 }, // Username
+      { wch: 25 }, // Client
+      { wch: 20 }  // Created At
+    ];
+    worksheet['!cols'] = columnWidths;
+
+    // Generate Excel file buffer
+    const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+    // Set response headers
+    const filename = `travelers-export-${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    // Send file
+    res.send(excelBuffer);
+  } catch (error) {
+    console.error('Error exporting travelers:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to export travelers',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -248,6 +345,79 @@ router.put('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), 
 });
 
 /**
+ * @route   DELETE /api/travelers/bulk
+ * @desc    Delete multiple travelers
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN - CLIENT can only delete their own travelers)
+ */
+router.delete('/bulk', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+  try {
+    console.log('🗑️  Bulk delete request received');
+    console.log('Request body:', req.body);
+    console.log('Request method:', req.method);
+    
+    const { travelerIds } = req.body;
+
+    if (!travelerIds || !Array.isArray(travelerIds) || travelerIds.length === 0) {
+      console.log('❌ Invalid travelerIds:', travelerIds);
+      return res.status(400).json({
+        success: false,
+        message: 'Traveler IDs array is required',
+        received: req.body
+      });
+    }
+
+    // Fetch all travelers to verify permissions
+    const travelers = await User.find({
+      _id: { $in: travelerIds },
+      role: 'TRAVELER'
+    });
+
+    if (travelers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No travelers found with the provided IDs'
+      });
+    }
+
+    // Verify permissions: CLIENT can only delete their own travelers
+    if (req.user.role === 'CLIENT') {
+      const unauthorizedTravelers = travelers.filter(
+        traveler => traveler.createdBy?.toString() !== req.user._id.toString()
+      );
+      
+      if (unauthorizedTravelers.length > 0) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: You can only delete travelers you created'
+        });
+      }
+    }
+
+    // Delete travelers
+    const deleteResult = await User.deleteMany({
+      _id: { $in: travelerIds },
+      role: 'TRAVELER'
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully deleted ${deleteResult.deletedCount} traveler(s)`,
+      data: {
+        deletedCount: deleteResult.deletedCount,
+        requestedCount: travelerIds.length
+      }
+    });
+  } catch (error) {
+    console.error('Error deleting travelers in bulk:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete travelers',
+      error: error.message
+    });
+  }
+});
+
+/**
  * @route   DELETE /api/travelers/:id
  * @desc    Delete traveler
  * @access  Private (CLIENT, SUPER_ADMIN, ADMIN - CLIENT can only delete their own travelers)
@@ -284,6 +454,74 @@ router.delete('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']
     res.status(500).json({
       success: false,
       message: 'Failed to delete traveler',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @route   POST /api/travelers/sync-from-sheets
+ * @desc    Sync travelers from Google Sheets
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN)
+ * @note    CLIENT users can only sync travelers that will be assigned to them
+ */
+router.post('/sync-from-sheets', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+  try {
+    const { sheetId, sheetName } = req.body;
+
+    if (!sheetId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google Sheet ID is required'
+      });
+    }
+
+    console.log(`🔄 Starting Google Sheets sync for sheet: ${sheetId}`);
+    console.log(`👤 User role: ${req.user.role}, User ID: ${req.user._id}`);
+
+    // For CLIENT users, all synced travelers will be assigned to them
+    // For SUPER_ADMIN/ADMIN, travelers will be assigned based on Client column in sheet
+    const syncUserId = req.user._id;
+    const forceClientAssignment = req.user.role === 'CLIENT';
+
+    // Perform sync
+    const syncResults = await googleSheetsSyncService.syncTravelersFromSheet(
+      sheetId,
+      sheetName || '',
+      syncUserId,
+      forceClientAssignment
+    );
+
+    if (syncResults.success) {
+      res.json({
+        success: true,
+        message: syncResults.message,
+        data: {
+          total: syncResults.total,
+          created: syncResults.created,
+          updated: syncResults.updated,
+          skipped: syncResults.skipped,
+          errors: syncResults.errors
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: syncResults.message,
+        data: {
+          total: syncResults.total,
+          created: syncResults.created,
+          updated: syncResults.updated,
+          skipped: syncResults.skipped,
+          errors: syncResults.errors
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error syncing from Google Sheets:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to sync from Google Sheets',
       error: error.message
     });
   }

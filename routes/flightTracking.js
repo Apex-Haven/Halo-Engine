@@ -15,4 +15,7 @@ router.get('/airport/:iataCode', optionalAuth, flightTrackingController.getAirpo
 // Search flights
 router.get('/search', optionalAuth, flightTrackingController.searchFlights);
 
+// Get flights by region (bounding box)
+router.get('/region', optionalAuth, flightTrackingController.getFlightsByRegion);
+
 module.exports = router;

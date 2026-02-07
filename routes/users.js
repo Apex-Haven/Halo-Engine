@@ -4,6 +4,39 @@ const User = require('../models/User');
 const { authenticate, authorize } = require('../middleware/auth');
 
 /**
+ * @route   GET /api/users/stats
+ * @desc    Get user counts by role (clients, vendors, drivers, travelers)
+ * @access  Private (Super Admin/Admin only)
+ */
+router.get('/stats', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+  try {
+    const [clients, vendors, drivers, travelers] = await Promise.all([
+      User.countDocuments({ role: 'CLIENT' }),
+      User.countDocuments({ role: 'VENDOR' }),
+      User.countDocuments({ role: 'DRIVER' }),
+      User.countDocuments({ role: 'TRAVELER' })
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        clients,
+        vendors,
+        drivers,
+        travelers
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching user stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user stats',
+      error: error.message
+    });
+  }
+});
+
+/**
  * @route   GET /api/users
  * @desc    Get all users (SUPER_ADMIN, ADMIN, VENDOR, CLIENT - excludes TRAVELER and DRIVER)
  * @access  Private (Super Admin/Admin only)

@@ -1,6 +1,6 @@
 const Transfer = require('../models/Transfer');
 const mongoose = require('mongoose');
-const { sendTemplatedEmail } = require('../config/nodemailer');
+const { sendTemplatedEmail: sendSendGridEmail } = require('../config/sendgrid');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
 
@@ -66,23 +66,74 @@ const createTransfer = async (req, res) => {
     
     await transfer.save();
 
-    // Send confirmation email to customer
+    // Send confirmation emails to client and traveler (if assigned)
+    const emailResults = {
+      client: null,
+      traveler: null
+    };
+
     try {
-      await sendTemplatedEmail(
-        transfer.customer_details.email,
-        'driverAssigned',
-        [
-          transfer.customer_details.name,
-          'TBD', // Driver name will be updated when assigned
-          'TBD', // Vehicle type
-          'TBD', // Vehicle number
-          transfer.transfer_details.pickup_location,
-          moment(transfer.transfer_details.estimated_pickup_time).format('MMMM Do YYYY, h:mm A'),
-          transfer._id
-        ]
-      );
+      // Format dates
+      const departureTime = moment(transfer.flight_details?.departure_time).format('MMMM Do YYYY, h:mm A');
+      const arrivalTime = moment(transfer.flight_details?.arrival_time).format('MMMM Do YYYY, h:mm A');
+      
+      // Send email to client
+      if (transfer.customer_details?.email) {
+        const clientEmailResult = await sendSendGridEmail(
+          transfer.customer_details.email,
+          'transferCreatedClient',
+          [
+            transfer.customer_details.name,
+            transfer._id,
+            transfer.flight_details?.flight_no || 'N/A',
+            transfer.flight_details?.departure_airport || 'N/A',
+            transfer.flight_details?.arrival_airport || 'N/A',
+            departureTime,
+            arrivalTime,
+            transfer.transfer_details?.pickup_location || 'N/A',
+            transfer.transfer_details?.drop_location || 'N/A'
+          ]
+        );
+        emailResults.client = clientEmailResult;
+        
+        if (clientEmailResult.success) {
+          console.log(`✅ Transfer creation email sent to client: ${transfer.customer_details.email} (Status: ${clientEmailResult.statusCode}, Message ID: ${clientEmailResult.messageId || 'N/A'})`);
+        } else {
+          console.error(`❌ Failed to send email to client ${transfer.customer_details.email}:`, clientEmailResult.error);
+        }
+      } else {
+        console.warn(`⚠️ No client email found for transfer ${transfer._id}`);
+      }
+
+      // Send email to traveler if assigned
+      if (transfer.traveler_details?.email) {
+        const travelerEmailResult = await sendSendGridEmail(
+          transfer.traveler_details.email,
+          'transferCreatedTraveler',
+          [
+            transfer.traveler_details.name,
+            transfer._id,
+            transfer.flight_details?.flight_no || 'N/A',
+            transfer.flight_details?.departure_airport || 'N/A',
+            transfer.flight_details?.arrival_airport || 'N/A',
+            departureTime,
+            arrivalTime,
+            transfer.transfer_details?.pickup_location || 'N/A',
+            transfer.transfer_details?.drop_location || 'N/A'
+          ]
+        );
+        emailResults.traveler = travelerEmailResult;
+        
+        if (travelerEmailResult.success) {
+          console.log(`✅ Transfer creation email sent to traveler: ${transfer.traveler_details.email} (Status: ${travelerEmailResult.statusCode}, Message ID: ${travelerEmailResult.messageId || 'N/A'})`);
+        } else {
+          console.error(`❌ Failed to send email to traveler ${transfer.traveler_details.email}:`, travelerEmailResult.error);
+        }
+      } else {
+        console.log(`ℹ️ No traveler assigned for transfer ${transfer._id}, skipping traveler email`);
+      }
     } catch (emailError) {
-      console.error('Failed to send confirmation email:', emailError);
+      console.error('❌ Error sending confirmation emails:', emailError);
       // Don't fail the request if email fails
     }
 
