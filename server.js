@@ -29,6 +29,7 @@ const flightIntegrationRoutes = require('./routes/flightIntegration');
 const hotelRoutes = require('./routes/hotels');
 const travelAdvisoryRoutes = require('./routes/travelAdvisory');
 const hotelPdfRoutes = require('./routes/hotelPdf');
+const inAppNotificationRoutes = require('./routes/inAppNotifications');
 
 // Import services
 const cronService = require('./services/cronService');
@@ -166,6 +167,7 @@ app.use('/api/flight-integration', flightIntegrationRoutes);
 app.use('/api/hotels', hotelRoutes);
 app.use('/api/travel-advisory', travelAdvisoryRoutes);
 app.use('/api/hotel-pdf', hotelPdfRoutes);
+app.use('/api/in-app-notifications', inAppNotificationRoutes);
 
 // API routes (without /api prefix - for cluster/reverse proxy compatibility)
 // This allows routes to work when:

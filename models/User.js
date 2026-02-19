@@ -56,6 +56,11 @@ const userSchema = new mongoose.Schema({
       type: String,
       match: /^\+[1-9]\d{1,14}$/
     },
+    job_position: { type: String, trim: true, maxlength: 100 },
+    company_name: { type: String, trim: true, maxlength: 150 },
+    consent_email: { type: Boolean, default: null },
+    consent_whatsapp: { type: Boolean, default: null },
+    whatsapp_number: { type: String, trim: true, maxlength: 20 },
     avatar: {
       type: String,
       default: null

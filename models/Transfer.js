@@ -12,6 +12,8 @@ const auditLogSchema = new mongoose.Schema({
       'status_changed',
       'notification_sent',
       'flight_updated',
+      'client_details_updated',
+      'traveler_assigned',
       'cancelled',
       'completed'
     ]
@@ -59,7 +61,14 @@ const customerDetailsSchema = new mongoose.Schema({
     required: true,
     min: 0,
     max: 50
-  }
+  },
+  // Delegate 1 optional fields (event registration format)
+  job_position: { type: String, trim: true, maxlength: 100 },
+  company_name: { type: String, trim: true, maxlength: 200 },
+  consent_email: { type: Boolean, default: null },
+  consent_whatsapp: { type: Boolean, default: null },
+  whatsapp_number: { type: String, trim: true, maxlength: 20 },
+  flight_booked: { type: Boolean, default: null }
 }, { _id: false });
 
 const flightDetailsSchema = new mongoose.Schema({
@@ -282,13 +291,53 @@ const notificationsSchema = new mongoose.Schema({
   }]
 }, { _id: false });
 
+const travelerDetailsSchema = new mongoose.Schema({
+  name: { type: String, trim: true, maxlength: 100 },
+  email: { type: String, lowercase: true, trim: true },
+  contact_number: { type: String, trim: true },
+  // Delegate 2 optional fields
+  job_position: { type: String, trim: true, maxlength: 100 },
+  company_name: { type: String, trim: true, maxlength: 200 },
+  consent_email: { type: Boolean, default: null },
+  consent_whatsapp: { type: Boolean, default: null },
+  whatsapp_number: { type: String, trim: true, maxlength: 20 },
+  flight_same_as_delegate_1: { type: Boolean, default: null }
+}, { _id: false });
+
+// Delegate 2 flight (mirrors flight_details when flight_same_as_delegate_1 is false)
+const travelerFlightDetailsSchema = new mongoose.Schema({
+  flight_no: { type: String, uppercase: true, trim: true, maxlength: 10 },
+  airline: { type: String, trim: true, maxlength: 50 },
+  departure_airport: { type: String, uppercase: true, trim: true, maxlength: 3 },
+  arrival_airport: { type: String, uppercase: true, trim: true, maxlength: 3 },
+  departure_time: { type: Date },
+  arrival_time: { type: Date },
+  status: { type: String, enum: ['on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed'], default: 'on_time' },
+  delay_minutes: { type: Number, default: 0, min: 0 },
+  gate: { type: String, trim: true, maxlength: 10 },
+  terminal: { type: String, trim: true, maxlength: 10 }
+}, { _id: false });
+
+// Additional delegates (selected from Travelers); user can add as many as needed
+const delegateEntrySchema = new mongoose.Schema({
+  traveler_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  flight_same_as_primary: { type: Boolean, default: true },
+  flight_details: { type: travelerFlightDetailsSchema, default: null }
+}, { _id: false });
+
 const transferSchema = new mongoose.Schema({
   _id: {
     type: String,
     required: true,
     uppercase: true,
     trim: true,
-    match: /^APX\d{6}$/ // APX followed by 6 digits
+    // APX + optional client name letters + 5 digits (e.g. APXSTALIN82919) or legacy APX + 6 digits
+    match: /^APX([A-Z]{1,20}\d{5}|\d{4,6})$/
+  },
+  customer_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   },
   customer_details: {
     type: customerDetailsSchema,
@@ -304,7 +353,26 @@ const transferSchema = new mongoose.Schema({
   },
   vendor_details: {
     type: vendorDetailsSchema,
-    required: true
+    required: false,
+    default: null
+  },
+  traveler_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  traveler_details: {
+    type: travelerDetailsSchema,
+    default: null
+  },
+  traveler_flight_details: {
+    type: travelerFlightDetailsSchema,
+    default: null
+  },
+  // Additional delegates (array); each references a Traveler and has flight_same_as_primary or own flight_details
+  delegates: {
+    type: [delegateEntrySchema],
+    default: []
   },
   assigned_driver_details: {
     type: assignedDriverDetailsSchema,
@@ -347,6 +415,7 @@ transferSchema.index({ 'flight_details.status': 1 });
 transferSchema.index({ 'notifications.next_scheduled_notification': 1 });
 transferSchema.index({ 'customer_details.email': 1 });
 transferSchema.index({ 'customer_details.contact_number': 1 });
+transferSchema.index({ customer_id: 1 });
 
 // Compound indexes for common queries
 transferSchema.index({ 'flight_details.arrival_time': 1, 'flight_details.status': 1 });
@@ -395,7 +464,8 @@ transferSchema.methods.addAuditLog = function(action, by, details = '') {
     by,
     details
   });
-  return this.save();
+  // Don't save here - let the caller save to avoid parallel save conflicts
+  return this;
 };
 
 transferSchema.methods.updateFlightStatus = function(status, delayMinutes = 0) {

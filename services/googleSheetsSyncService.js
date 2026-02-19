@@ -82,7 +82,7 @@ class GoogleSheetsSyncService {
       .replace(/\s+/g, '')
       .replace(/[_-]/g, '');
     
-    // Map common variations
+    // Map common variations (normalized key → internal field name used in getValue)
     const columnMap = {
       'firstname': 'firstName',
       'first_name': 'firstName',
@@ -90,8 +90,13 @@ class GoogleSheetsSyncService {
       'lastname': 'lastName',
       'last_name': 'lastName',
       'lname': 'lastName',
+      'fullname': 'fullName',
+      'full_name': 'fullName',
+      'name': 'fullName',
       'email': 'email',
       'emailaddress': 'email',
+      'emailid': 'email',
+      'email_id': 'email',
       'phone': 'phone',
       'phonenumber': 'phone',
       'mobile': 'phone',
@@ -142,19 +147,31 @@ class GoogleSheetsSyncService {
       return value ? String(value).trim() : null;
     };
 
-    const firstName = getValue('firstName');
-    const lastName = getValue('lastName');
+    let firstName = getValue('firstName');
+    let lastName = getValue('lastName');
+    const fullName = getValue('fullName');
+    // If sheet has "Full Name" instead of First/Last, split into first and last
+    if (fullName && fullName.trim() && (!firstName || !lastName)) {
+      const parts = fullName.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        firstName = firstName || parts[0] || '';
+        lastName = lastName || parts.slice(1).join(' ').trim() || '';
+      } else if (parts.length === 1) {
+        firstName = firstName || parts[0] || '';
+        lastName = lastName || parts[0] || ''; // use same for last if single word
+      }
+    }
     const email = getValue('email');
     const phone = getValue('phone');
     const client = getValue('client');
     const username = getValue('username');
     const password = getValue('password');
 
-    // Validate required fields
+    // Validate required fields (need at least first name, last name, and email)
     if (!firstName || !lastName || !email) {
       return {
         valid: false,
-        error: 'Missing required fields: FirstName, LastName, or Email'
+        error: 'Missing required fields: FirstName, LastName, or Email (or use columns: Full Name and Email Address / Email ID)'
       };
     }
 
@@ -518,6 +535,10 @@ class GoogleSheetsSyncService {
           columnMap[normalized] = headerName; // Map normalized name to actual header name
         }
       });
+      // Prefer "Email Address" over "Email ID" for email when both exist (common in forms)
+      if (firstRow['Email Address'] !== undefined && firstRow['Email Address'] !== null && String(firstRow['Email Address']).trim() !== '') {
+        columnMap['email'] = 'Email Address';
+      }
 
       console.log('📋 Column mapping:', columnMap);
       console.log('📋 First row sample:', firstRow);
@@ -573,6 +594,21 @@ class GoogleSheetsSyncService {
             email: email.toLowerCase(),
             role: 'TRAVELER'
           });
+
+          // If email exists under another role (e.g. CLIENT), don't create duplicate – skip with clear message
+          if (!existingTraveler) {
+            const existingUserAnyRole = await User.findOne({ email: email.toLowerCase() });
+            if (existingUserAnyRole) {
+              results.skipped++;
+              results.errors.push({
+                row: i + 1,
+                email,
+                error: `Email already registered as ${existingUserAnyRole.role}. Use a different email for a traveler, or use that account in the portal.`
+              });
+              console.warn(`⚠️  Row ${i + 1} (${email}): Skipped - email already exists as role "${existingUserAnyRole.role}"`);
+              continue;
+            }
+          }
 
           if (existingTraveler) {
             // Update existing traveler

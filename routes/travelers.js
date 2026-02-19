@@ -229,7 +229,12 @@ router.post('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), as
       profile: {
         firstName: profile.firstName,
         lastName: profile.lastName,
-        phone: profile.phone || ''
+        phone: profile.phone || '',
+        job_position: profile.job_position || '',
+        company_name: profile.company_name || '',
+        consent_email: profile.consent_email ?? null,
+        consent_whatsapp: profile.consent_whatsapp ?? null,
+        whatsapp_number: profile.whatsapp_number || ''
       },
       createdBy: createdByUserId,
       preferences: preferences || {
@@ -315,7 +320,12 @@ router.put('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), 
     if (profile) {
       updateData['profile.firstName'] = profile.firstName;
       updateData['profile.lastName'] = profile.lastName;
-      if (profile.phone) updateData['profile.phone'] = profile.phone;
+      if (profile.phone !== undefined) updateData['profile.phone'] = profile.phone;
+      if (profile.job_position !== undefined) updateData['profile.job_position'] = profile.job_position;
+      if (profile.company_name !== undefined) updateData['profile.company_name'] = profile.company_name;
+      if (profile.consent_email !== undefined) updateData['profile.consent_email'] = profile.consent_email;
+      if (profile.consent_whatsapp !== undefined) updateData['profile.consent_whatsapp'] = profile.consent_whatsapp;
+      if (profile.whatsapp_number !== undefined) updateData['profile.whatsapp_number'] = profile.whatsapp_number;
     }
     if (preferences) updateData.preferences = preferences;
     if (password && password.trim() !== '') {

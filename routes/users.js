@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const Transfer = require('../models/Transfer');
 const { authenticate, authorize } = require('../middleware/auth');
 
 /**
@@ -432,6 +433,26 @@ router.put('/:id', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req
     .populate('createdBy', 'username email profile')
     .populate('assignedClients', 'username email profile')
     .populate('assignedVendors', 'username email profile');
+
+    // Sync name to transfers where this user is customer or traveler
+    if (profile && (profile.firstName !== undefined || profile.lastName !== undefined)) {
+      const firstName = updatedUser.profile?.firstName ?? user.profile?.firstName ?? '';
+      const lastName = updatedUser.profile?.lastName ?? user.profile?.lastName ?? '';
+      const newName = `${firstName} ${lastName}`.trim() || updatedUser.profile?.firstName || user.profile?.firstName || 'Client';
+      try {
+        await Transfer.updateMany(
+          { customer_id: userId },
+          { $set: { 'customer_details.name': newName } }
+        );
+        await Transfer.updateMany(
+          { traveler_id: userId },
+          { $set: { 'traveler_details.name': newName } }
+        );
+      } catch (syncErr) {
+        console.error('Error syncing user name to transfers:', syncErr);
+        // Don't fail the user update if transfer sync fails
+      }
+    }
 
     res.json({
       success: true,

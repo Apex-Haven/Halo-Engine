@@ -7,6 +7,7 @@ const {
   getTransfer,
   getTransfers,
   updateTransfer,
+  assignVendor,
   assignDriver,
   updateDriverStatus,
   confirmTravelerPickup,
@@ -36,10 +37,10 @@ const {
 
 /**
  * @route   POST /api/transfers
- * @desc    Create new transfer
- * @access  Private (Admin, Operations Manager)
+ * @desc    Create new transfer (Client: no vendor; Admin: optional vendor)
+ * @access  Private (Client, Admin, Operations Manager)
  */
-router.post('/', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER'), validateTransfer, createTransfer);
+router.post('/', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CLIENT'), validateTransfer, createTransfer);
 
 /**
  * @route   GET /api/transfers
@@ -68,6 +69,13 @@ router.get('/:id', authenticate, validateApexId, authorizeResource('transfer'), 
  * @access  Private (Admin, Operations Manager, Vendor Manager)
  */
 router.put('/:id', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER'), authorizeResource('transfer'), validateTransfer, updateTransfer);
+
+/**
+ * @route   PUT /api/transfers/:id/vendor
+ * @desc    Assign vendor to transfer (admin only; makes transfer visible to vendor)
+ * @access  Private (Super Admin, Admin, Operations Manager)
+ */
+router.put('/:id/vendor', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER'), assignVendor);
 
 /**
  * @route   PUT /api/transfers/:id/driver
@@ -106,9 +114,9 @@ router.put('/:id/traveler', authenticate, validateApexId, assignTraveler);
 
 /**
  * @route   DELETE /api/transfers/:id
- * @desc    Delete transfer
- * @access  Private (Admin only)
+ * @desc    Delete transfer (Admin: any; Client: own only)
+ * @access  Private (Super Admin, Admin, Client for own)
  */
-router.delete('/:id', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN'), authorizeResource('transfer'), deleteTransfer);
+router.delete('/:id', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'CLIENT'), authorizeResource('transfer'), deleteTransfer);
 
 module.exports = router;

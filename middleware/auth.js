@@ -191,19 +191,21 @@ const checkTransferAccess = async (user, transferId) => {
       const Transfer = require('../models/Transfer');
       const transfer = await Transfer.findById(transferId);
       if (!transfer) return false;
-      
-      // For VENDOR: check if transfer.vendor_id matches user's _id
-      // For DRIVER: check if transfer.vendor_id matches user's vendorId
       const vendorIdToCheck = user.role === 'VENDOR' ? user._id.toString() : user.vendorId?.toString();
-      const transferVendorId = transfer.vendor_id ? String(transfer.vendor_id) : null;
-      
-      return transfer.vendor_id && transferVendorId === vendorIdToCheck;
+      const transferVendorId = (transfer.vendor_details && transfer.vendor_details.vendor_id)
+        ? String(transfer.vendor_details.vendor_id)
+        : null;
+      return !!transferVendorId && transferVendorId === vendorIdToCheck;
     
     case 'CLIENT':
     case 'TRAVELER':
-      // Check if transfer belongs to client/traveler
-      const transfers = user.role === 'CLIENT' ? user.travelerTransfers : user.travelerTransfers;
-      return transfers && transfers.includes(transferId);
+      const TransferModel = require('../models/Transfer');
+      const t = await TransferModel.findById(transferId).select('customer_id traveler_id').lean();
+      if (!t) return false;
+      if (user.role === 'CLIENT') {
+        return t.customer_id && String(t.customer_id) === String(user._id);
+      }
+      return t.traveler_id && String(t.traveler_id) === String(user._id);
     
     default:
       return false;

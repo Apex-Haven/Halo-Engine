@@ -3,11 +3,11 @@ const Joi = require('joi');
 // Common validation schemas
 const commonSchemas = {
   apexId: Joi.string()
-    .pattern(/^APX\d{4,6}$/) // Allow 4-6 digits for flexibility with existing transfers
+    .pattern(/^APX([A-Z]{1,20}\d{5}|\d{4,6})$/) // APX + client name + 5 digits, or legacy APX + 4-6 digits
     .uppercase()
     .required()
     .messages({
-      'string.pattern.base': 'Apex ID must be in format APX followed by 4-6 digits (e.g., APX123456 or APX67774)'
+      'string.pattern.base': 'Apex ID must be like APXSTALIN82919 (APX + name + 5 digits) or APX123456'
     }),
 
   phoneNumber: Joi.string()
@@ -63,9 +63,9 @@ const commonSchemas = {
     })
 };
 
-// Transfer creation schema
+// Transfer creation schema (_id is optional - backend generates APX + client name + 5 digits)
 const createTransferSchema = Joi.object({
-  _id: commonSchemas.apexId,
+  _id: Joi.string().pattern(/^APX([A-Z]{1,20}\d{5}|\d{4,6})$/i).uppercase().optional(),
   
   // Customer and Vendor IDs (ObjectId strings)
   customer_id: Joi.alternatives()
@@ -80,17 +80,16 @@ const createTransferSchema = Joi.object({
       'alternatives.match': 'customer_id must be a valid MongoDB ObjectId string'
     }),
   
+  // Optional: client cannot select vendor; admin can assign later via PUT /:id/vendor
   vendor_id: Joi.alternatives()
     .try(
-      Joi.string().pattern(/^[0-9a-fA-F]{24}$/).required().messages({
+      Joi.string().pattern(/^[0-9a-fA-F]{24}$/).messages({
         'string.pattern.base': 'vendor_id must be a valid MongoDB ObjectId'
       }),
-      Joi.string().min(1).required()
+      Joi.string().min(1)
     )
-    .messages({
-      'any.required': 'vendor_id is required',
-      'alternatives.match': 'vendor_id must be a valid MongoDB ObjectId string'
-    }),
+    .optional()
+    .allow(null, ''),
   
   customer_details: Joi.object({
     name: Joi.string()
@@ -124,7 +123,13 @@ const createTransferSchema = Joi.object({
       .messages({
         'number.min': 'Luggage count cannot be negative',
         'number.max': 'Luggage count cannot exceed 50'
-      })
+      }),
+    job_position: Joi.string().trim().max(100).allow('', null),
+    company_name: Joi.string().trim().max(200).allow('', null),
+    consent_email: Joi.boolean().allow(null),
+    consent_whatsapp: Joi.boolean().allow(null),
+    whatsapp_number: Joi.string().trim().max(20).allow('', null),
+    flight_booked: Joi.boolean().allow(null)
   }).required(),
 
   flight_details: Joi.object({
@@ -160,6 +165,50 @@ const createTransferSchema = Joi.object({
       .max(10)
       .allow('', null)
   }).required(),
+
+  traveler_id: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).allow(null, ''),
+  traveler_details: Joi.object({
+    name: Joi.string().trim().max(100).allow('', null),
+    email: Joi.string().email().lowercase().allow('', null),
+    contact_number: Joi.string().trim().max(20).allow('', null),
+    job_position: Joi.string().trim().max(100).allow('', null),
+    company_name: Joi.string().trim().max(200).allow('', null),
+    consent_email: Joi.boolean().allow(null),
+    consent_whatsapp: Joi.boolean().allow(null),
+    whatsapp_number: Joi.string().trim().max(20).allow('', null),
+    flight_same_as_delegate_1: Joi.boolean().allow(null)
+  }).allow(null),
+  traveler_flight_details: Joi.object({
+    flight_no: Joi.string().trim().max(10).allow('', null),
+    airline: Joi.string().trim().max(50).allow('', null),
+    departure_airport: Joi.string().trim().max(3).uppercase().allow('', null),
+    arrival_airport: Joi.string().trim().max(3).uppercase().allow('', null),
+    departure_time: Joi.date().iso().allow(null),
+    arrival_time: Joi.date().iso().allow(null),
+    status: Joi.string().valid('on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed').default('on_time'),
+    delay_minutes: Joi.number().integer().min(0).default(0),
+    gate: Joi.string().trim().max(10).allow('', null),
+    terminal: Joi.string().trim().max(10).allow('', null)
+  }).allow(null),
+
+  delegates: Joi.array().items(
+    Joi.object({
+      traveler_id: Joi.string().pattern(/^[0-9a-fA-F]{24}$/).required(),
+      flight_same_as_primary: Joi.boolean().default(true),
+      flight_details: Joi.object({
+        flight_no: Joi.string().trim().max(10).allow('', null),
+        airline: Joi.string().trim().max(50).allow('', null),
+        departure_airport: Joi.string().trim().max(3).uppercase().allow('', null),
+        arrival_airport: Joi.string().trim().max(3).uppercase().allow('', null),
+        departure_time: Joi.date().iso().allow(null),
+        arrival_time: Joi.date().iso().allow(null),
+        status: Joi.string().valid('on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed').default('on_time'),
+        delay_minutes: Joi.number().integer().min(0).default(0),
+        gate: Joi.string().trim().max(10).allow('', null),
+        terminal: Joi.string().trim().max(10).allow('', null)
+      }).allow(null)
+    })
+  ).allow(null),
 
   transfer_details: Joi.object({
     pickup_location: Joi.string()
@@ -200,23 +249,14 @@ const createTransferSchema = Joi.object({
       })
   }).required(),
 
+  // Optional: set by backend when vendor_id provided, or by admin via PUT /:id/vendor
   vendor_details: Joi.object({
     vendor_id: commonSchemas.vendorId,
-    vendor_name: Joi.string()
-      .trim()
-      .min(2)
-      .max(100)
-      .required(),
-    
-    contact_person: Joi.string()
-      .trim()
-      .min(2)
-      .max(100)
-      .required(),
-    
+    vendor_name: Joi.string().trim().min(2).max(100).required(),
+    contact_person: Joi.string().trim().min(2).max(100).required(),
     contact_number: commonSchemas.phoneNumber,
     email: commonSchemas.email
-  }).required(),
+  }).optional().allow(null),
 
   // Driver assignment (optional)
   assigned_driver_details: Joi.object({
@@ -702,15 +742,14 @@ const validateApexId = (req, res, next) => {
   // Normalize to uppercase
   const normalizedId = id ? id.toUpperCase().trim() : '';
   
-  // Check format: APX followed by 4-6 digits (flexible for existing transfers)
-  // But prefer 6 digits for new transfers
-  const apexIdPattern = /^APX\d{4,6}$/;
+  // APX + client name + 5 digits (e.g. APXSTALIN82919) or legacy APX + 4-6 digits
+  const apexIdPattern = /^APX([A-Z]{1,20}\d{5}|\d{4,6})$/;
   
   if (!apexIdPattern.test(normalizedId)) {
     return res.status(400).json({
       success: false,
       message: 'Invalid Apex ID format',
-      error: `Apex ID must be in format APX followed by 4-6 digits (e.g., APX123456). Received: ${id}`
+      error: `Apex ID must be like APXSTALIN82919 or APX123456. Received: ${id}`
     });
   }
   
@@ -735,12 +774,11 @@ const validateTrackingId = (req, res, next) => {
   // Store original for potential name search
   req.params.originalId = id.trim();
   
-  // Check if it's an APX ID format
+  // Check if it's an APX ID format (APX + name + 5 digits, or legacy APX + 4-6 digits)
   const normalizedId = id.toUpperCase().trim();
-  const apexIdPattern = /^APX\d{4,6}$/;
+  const apexIdPattern = /^APX([A-Z]{1,20}\d{5}|\d{4,6})$/;
   
   if (apexIdPattern.test(normalizedId)) {
-    // It's an APX ID - normalize it
     req.params.id = normalizedId;
     req.params.searchType = 'id';
   } else {

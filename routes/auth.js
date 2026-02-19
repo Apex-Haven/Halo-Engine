@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Transfer = require('../models/Transfer');
 const { authenticate, authorize } = require('../middleware/auth');
 const { authLimiter, registrationLimiter, passwordResetLimiter } = require('../middleware/rateLimiter');
 const { logAuthEvent } = require('../middleware/auditLogger');
@@ -271,6 +272,23 @@ router.put('/profile', authenticate, async (req, res) => {
       { $set: updateData },
       { new: true, runValidators: true }
     );
+
+    // Sync name to transfers where this user is customer or traveler
+    if (firstName !== undefined || lastName !== undefined) {
+      const newName = `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim() || 'Client';
+      try {
+        await Transfer.updateMany(
+          { customer_id: req.user._id },
+          { $set: { 'customer_details.name': newName } }
+        );
+        await Transfer.updateMany(
+          { traveler_id: req.user._id },
+          { $set: { 'traveler_details.name': newName } }
+        );
+      } catch (syncErr) {
+        console.error('Error syncing profile name to transfers:', syncErr);
+      }
+    }
 
     res.json({
       success: true,

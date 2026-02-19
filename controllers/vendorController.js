@@ -2,6 +2,7 @@ const Transfer = require('../models/Transfer');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
 const mongoose = require('mongoose');
+const { notifyClientDriverAssigned } = require('../services/inAppNotificationService');
 
 
 // Get transfers by vendor
@@ -203,11 +204,8 @@ const assignDriverToVendorTransfer = async (req, res) => {
       });
     }
 
-    // Assign driver (doesn't save yet)
-    transfer.assignDriver(driverDetails, `vendor:${vendorId}`);
-    
-    // Save the transfer first
-    await transfer.save();
+    // Assign driver (saves once internally)
+    await transfer.assignDriver(driverDetails, `vendor:${vendorId}`);
 
     // Send notification to customer
     try {
@@ -226,15 +224,20 @@ const assignDriverToVendorTransfer = async (req, res) => {
         'whatsapp'
       );
 
-      // Record notification in transfer and save again
-      transfer.addNotificationRecord(
+      // Record notification in transfer (saves once)
+      await transfer.addNotificationRecord(
         'whatsapp',
         message,
         transfer.customer_details.contact_number
       );
-      await transfer.save();
     } catch (notificationError) {
       console.error('Failed to send driver assignment notification:', notificationError);
+    }
+
+    try {
+      await notifyClientDriverAssigned(transfer);
+    } catch (notifErr) {
+      console.error('In-app notification (driver assigned) failed:', notifErr);
     }
 
     res.json({

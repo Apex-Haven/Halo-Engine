@@ -1,26 +1,45 @@
 const Transfer = require('../models/Transfer');
+const User = require('../models/User');
 const mongoose = require('mongoose');
 const { sendTemplatedEmail: sendSendGridEmail } = require('../config/sendgrid');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const moment = require('moment');
+const {
+  notifyAdminsTransferCreated,
+  notifyClientVendorAssigned,
+  notifyVendorAssignedToTransfer,
+  notifyClientDriverAssigned
+} = require('../services/inAppNotificationService');
 
 
-// Create new transfer
+// Generate APEX ID: APX + client name (letters only, uppercase, max 20) + 5 random digits
+function generateApexId(customerName) {
+  const namePart = (customerName || '')
+    .replace(/[^a-zA-Z]/g, '')
+    .toUpperCase()
+    .slice(0, 20) || 'X';
+  const digits = Math.floor(Math.random() * 90000) + 10000; // 10000–99999
+  return `APX${namePart}${digits}`;
+}
+
+// Create new transfer (Client: no vendor; Admin: optional vendor)
 const createTransfer = async (req, res) => {
   try {
-    const transferData = req.body;
-    
-    // Check if transfer already exists
-    const existingTransfer = await Transfer.findById(transferData._id);
-    if (existingTransfer) {
-      return res.status(409).json({
-        success: false,
-        message: 'Transfer with this Apex ID already exists',
-        apexId: transferData._id
-      });
-    }
+    const transferData = { ...req.body };
+    const userRole = req.user?.role;
+    const isClient = userRole === 'CLIENT';
 
-    // Validate and convert customer_id and vendor_id to ObjectId
+    // Generate APEX ID on backend: APX + client name + 5 digits
+    const customerName = transferData.customer_details?.name || 'Client';
+    let apexId;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      apexId = generateApexId(customerName);
+      const exists = await Transfer.findById(apexId);
+      if (!exists) break;
+    }
+    transferData._id = apexId;
+
+    // Customer: required. For CLIENT, must be self.
     if (!transferData.customer_id || transferData.customer_id === '' || transferData.customer_id === null) {
       return res.status(400).json({
         success: false,
@@ -28,42 +47,110 @@ const createTransfer = async (req, res) => {
         error: 'customer_id is required and cannot be empty'
       });
     }
-    
-    if (!transferData.vendor_id || transferData.vendor_id === '' || transferData.vendor_id === null) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required field',
-        error: 'vendor_id is required and cannot be empty'
-      });
-    }
-
-    // Convert customer_id to ObjectId if it's a string
     if (typeof transferData.customer_id === 'string') {
       if (!mongoose.Types.ObjectId.isValid(transferData.customer_id)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid customer_id format',
-          error: `customer_id "${transferData.customer_id}" must be a valid MongoDB ObjectId (24 hex characters)`
+          error: 'customer_id must be a valid MongoDB ObjectId (24 hex characters)'
         });
       }
       transferData.customer_id = new mongoose.Types.ObjectId(transferData.customer_id);
     }
-    
-    // Convert vendor_id to ObjectId if it's a string
-    if (typeof transferData.vendor_id === 'string') {
-      if (!mongoose.Types.ObjectId.isValid(transferData.vendor_id)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid vendor_id format',
-          error: `vendor_id "${transferData.vendor_id}" must be a valid MongoDB ObjectId (24 hex characters)`
-        });
-      }
-      transferData.vendor_id = new mongoose.Types.ObjectId(transferData.vendor_id);
+    if (isClient && transferData.customer_id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Clients can only create transfers for themselves',
+        error: 'customer_id must match your account'
+      });
     }
 
-    // Create new transfer
+    // Vendor: optional. Clients cannot select vendor (admin assigns later).
+    const hasVendor = transferData.vendor_id && transferData.vendor_id !== '' && transferData.vendor_id !== null;
+    if (hasVendor) {
+      if (typeof transferData.vendor_id === 'string') {
+        if (!mongoose.Types.ObjectId.isValid(transferData.vendor_id)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid vendor_id format',
+            error: 'vendor_id must be a valid MongoDB ObjectId (24 hex characters)'
+          });
+        }
+        transferData.vendor_id = new mongoose.Types.ObjectId(transferData.vendor_id);
+      }
+      const vendorUser = await User.findById(transferData.vendor_id);
+      if (!vendorUser || vendorUser.role !== 'VENDOR') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid vendor',
+          error: 'Vendor user not found or not a VENDOR role'
+        });
+      }
+      const vendorIdStr = vendorUser._id.toString();
+      transferData.vendor_details = {
+        vendor_id: vendorIdStr,
+        vendor_name: vendorUser.vendorDetails?.companyName || vendorUser.username || 'Vendor',
+        contact_person: [vendorUser.profile?.firstName, vendorUser.profile?.lastName].filter(Boolean).join(' ') || 'Contact',
+        contact_number: vendorUser.profile?.phone || '+0000000000',
+        email: vendorUser.email || ''
+      };
+    } else {
+      // No vendor: client-created or admin will assign later. Omit vendor_details.
+      delete transferData.vendor_id;
+      delete transferData.vendor_details;
+    }
+
+    // Don't persist vendor_id on document (we use vendor_details.vendor_id)
+    delete transferData.vendor_id;
+
+    // When Delegate 2 has "flight same as Delegate 1", copy flight_details to traveler_flight_details if not provided
+    if (transferData.traveler_details && transferData.traveler_details.flight_same_as_delegate_1 === true) {
+      if (!transferData.traveler_flight_details || !transferData.traveler_flight_details.flight_no) {
+        transferData.traveler_flight_details = transferData.flight_details
+          ? {
+            flight_no: transferData.flight_details.flight_no,
+            airline: transferData.flight_details.airline,
+            departure_airport: transferData.flight_details.departure_airport,
+            arrival_airport: transferData.flight_details.arrival_airport,
+            departure_time: transferData.flight_details.departure_time,
+            arrival_time: transferData.flight_details.arrival_time,
+            status: transferData.flight_details.status || 'on_time',
+            delay_minutes: transferData.flight_details.delay_minutes ?? 0,
+            gate: transferData.flight_details.gate,
+            terminal: transferData.flight_details.terminal
+          }
+          : null;
+      }
+    }
+
+    // Normalize delegates array: ObjectIds and copy primary flight when flight_same_as_primary
+    if (Array.isArray(transferData.delegates) && transferData.delegates.length > 0) {
+      const primaryFlight = transferData.flight_details;
+      transferData.delegates = transferData.delegates.map((d) => {
+        const entry = {
+          traveler_id: mongoose.Types.ObjectId.isValid(d.traveler_id) ? new mongoose.Types.ObjectId(d.traveler_id) : d.traveler_id,
+          flight_same_as_primary: d.flight_same_as_primary !== false,
+          flight_details: d.flight_details || null
+        };
+        if (entry.flight_same_as_primary && primaryFlight) {
+          entry.flight_details = {
+            flight_no: primaryFlight.flight_no,
+            airline: primaryFlight.airline,
+            departure_airport: primaryFlight.departure_airport,
+            arrival_airport: primaryFlight.arrival_airport,
+            departure_time: primaryFlight.departure_time,
+            arrival_time: primaryFlight.arrival_time,
+            status: primaryFlight.status || 'on_time',
+            delay_minutes: primaryFlight.delay_minutes ?? 0,
+            gate: primaryFlight.gate,
+            terminal: primaryFlight.terminal
+          };
+        }
+        return entry;
+      });
+    }
+
     const transfer = new Transfer(transferData);
-    
     await transfer.save();
 
     // Send confirmation emails to client and traveler (if assigned)
@@ -137,6 +224,15 @@ const createTransfer = async (req, res) => {
       // Don't fail the request if email fails
     }
 
+    // In-app notification to admins when client creates a transfer
+    if (userRole === 'CLIENT') {
+      try {
+        await notifyAdminsTransferCreated(transfer);
+      } catch (notifErr) {
+        console.error('In-app notification to admins failed:', notifErr);
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: 'Transfer created successfully',
@@ -157,7 +253,8 @@ const getTransfer = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const transfer = await Transfer.findById(id);
+    const transfer = await Transfer.findById(id)
+      .populate('delegates.traveler_id', 'username email profile');
     if (!transfer) {
       return res.status(404).json({
         success: false,
@@ -199,61 +296,15 @@ const getTransfers = async (req, res) => {
     // Build filter object
     const filter = {};
     
-    // If user is VENDOR, automatically filter by their vendor details
+    // If user is VENDOR, only show transfers assigned to them (admin assigns vendor first)
     if (req.user && req.user.role === 'VENDOR') {
-      // Match transfers by vendor email or company name
-      const vendorEmail = req.user.email;
-      const vendorCompanyName = req.user.vendorDetails?.companyName;
-      
-      if (vendorEmail || vendorCompanyName) {
-        // Build OR condition to match by email or company name
-        const vendorConditions = [];
-        
-        if (vendorEmail) {
-          vendorConditions.push({ 'vendor_details.email': vendorEmail });
-        }
-        
-        if (vendorCompanyName) {
-          vendorConditions.push({ 'vendor_details.vendor_name': vendorCompanyName });
-        }
-        
-        // Also try to match by vendor_id ObjectId
-        const Vendor = require('../models/Vendor');
-        
-        if (Vendor) {
-          try {
-            let vendor = null;
-            if (vendorCompanyName) {
-              vendor = await VendorModel.findOne({ companyName: vendorCompanyName });
-            }
-            if (!vendor && vendorEmail) {
-              vendor = await VendorModel.findOne({ 'contactPerson.email': vendorEmail });
-            }
-            if (vendor) {
-              vendorConditions.push({ vendor_id: vendor._id });
-            }
-          } catch (err) {
-            console.error('Error finding vendor:', err);
-          }
-        }
-        
-        if (vendorConditions.length > 0) {
-          filter.$or = filter.$or || [];
-          filter.$or.push(...vendorConditions);
-        } else {
-          // No matching criteria found, return empty results
-          return res.json({
-            success: true,
-            data: [],
-            pagination: {
-              current: parseInt(page),
-              pages: 0,
-              total: 0,
-              limit: parseInt(limit)
-            }
-          });
-        }
-      }
+      const vendorIdStr = req.user._id.toString();
+      filter['vendor_details.vendor_id'] = vendorIdStr;
+    }
+
+    // If user is CLIENT, only show their own transfers
+    if (req.user && req.user.role === 'CLIENT') {
+      filter.customer_id = req.user._id;
     }
     
     if (status) {
@@ -343,7 +394,7 @@ const getTransfers = async (req, res) => {
 const updateTransfer = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = { ...req.body };
     
     const transfer = await Transfer.findById(id);
     if (!transfer) {
@@ -351,6 +402,34 @@ const updateTransfer = async (req, res) => {
         success: false,
         message: 'Transfer not found',
         apexId: id
+      });
+    }
+
+    // Normalize delegates if provided
+    if (Array.isArray(updateData.delegates)) {
+      const primaryFlight = transfer.flight_details || updateData.flight_details;
+      updateData.delegates = updateData.delegates.map((d) => {
+        const entry = {
+          traveler_id: mongoose.Types.ObjectId.isValid(d.traveler_id) ? new mongoose.Types.ObjectId(d.traveler_id) : d.traveler_id,
+          flight_same_as_primary: d.flight_same_as_primary !== false,
+          flight_details: d.flight_details || null
+        };
+        if (entry.flight_same_as_primary && primaryFlight) {
+          const fd = primaryFlight.toObject ? primaryFlight.toObject() : primaryFlight;
+          entry.flight_details = {
+            flight_no: fd.flight_no,
+            airline: fd.airline,
+            departure_airport: fd.departure_airport,
+            arrival_airport: fd.arrival_airport,
+            departure_time: fd.departure_time,
+            arrival_time: fd.arrival_time,
+            status: fd.status || 'on_time',
+            delay_minutes: fd.delay_minutes ?? 0,
+            gate: fd.gate,
+            terminal: fd.terminal
+          };
+        }
+        return entry;
       });
     }
 
@@ -373,6 +452,72 @@ const updateTransfer = async (req, res) => {
   }
 };
 
+// Assign vendor to transfer (admin only) - makes transfer visible to that vendor
+const assignVendor = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { vendor_id: vendorId } = req.body;
+    if (!vendorId) {
+      return res.status(400).json({
+        success: false,
+        message: 'vendor_id is required'
+      });
+    }
+    const transfer = await Transfer.findById(id);
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found',
+        apexId: id
+      });
+    }
+    const vendorUser = await User.findById(vendorId);
+    if (!vendorUser || vendorUser.role !== 'VENDOR') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vendor. User not found or not a VENDOR role.'
+      });
+    }
+    const vendorIdStr = vendorUser._id.toString();
+    // E.164 placeholder when missing: must match +[1-9] + 1–14 digits (e.g. +10000000000)
+    const phone = vendorUser.profile?.phone || vendorUser.vendorDetails?.phone;
+    const contactNumber = (phone && /^\+[1-9]\d{1,14}$/.test(phone)) ? phone : '+10000000000';
+    const email = (vendorUser.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(vendorUser.email)) ? vendorUser.email : 'vendor@placeholder.local';
+    transfer.vendor_details = {
+      vendor_id: vendorIdStr,
+      vendor_name: vendorUser.vendorDetails?.companyName || vendorUser.username || 'Vendor',
+      contact_person: [vendorUser.profile?.firstName, vendorUser.profile?.lastName].filter(Boolean).join(' ') || 'Contact',
+      contact_number: contactNumber,
+      email
+    };
+    transfer.addAuditLog('updated', req.user ? `user:${req.user._id}` : 'api', 'Vendor assigned by admin');
+    await transfer.save();
+
+    // In-app: notify client and vendor
+    try {
+      await Promise.all([
+        notifyClientVendorAssigned(transfer),
+        notifyVendorAssignedToTransfer(transfer, vendorId)
+      ]);
+    } catch (notifErr) {
+      console.error('In-app notification (vendor assigned) failed:', notifErr);
+    }
+
+    res.json({
+      success: true,
+      message: 'Vendor assigned successfully',
+      data: transfer
+    });
+  } catch (error) {
+    console.error('Error assigning vendor:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign vendor',
+      error: error.message
+    });
+  }
+};
+
 // Assign driver to transfer
 const assignDriver = async (req, res) => {
   try {
@@ -389,12 +534,12 @@ const assignDriver = async (req, res) => {
       });
     }
 
-    // If user is VENDOR, verify they own this transfer
-    // The authorizeResource middleware already checked this, but double-check here
+    // If user is VENDOR, verify they own this transfer (assigned to them by admin)
     if (req.user && req.user.role === 'VENDOR') {
       const userIdString = req.user._id.toString();
-      const vendorIdString = transfer.vendor_id ? transfer.vendor_id.toString() : null;
-      
+      const vendorIdString = (transfer.vendor_details && transfer.vendor_details.vendor_id)
+        ? String(transfer.vendor_details.vendor_id)
+        : null;
       if (!vendorIdString || vendorIdString !== userIdString) {
         return res.status(403).json({
           success: false,
@@ -403,11 +548,8 @@ const assignDriver = async (req, res) => {
       }
     }
 
-    // Assign driver (doesn't save yet)
-    transfer.assignDriver(driverDetails, req.user ? `user:${req.user._id}` : 'api');
-    
-    // Save the transfer first before sending notifications
-    await transfer.save();
+    // Assign driver (saves once internally)
+    await transfer.assignDriver(driverDetails, req.user ? `user:${req.user._id}` : 'api');
 
     // Send notification to customer
     try {
@@ -442,16 +584,22 @@ const assignDriver = async (req, res) => {
         ]
       );
 
-      // Record notification in transfer and save again
-      transfer.addNotificationRecord(
+      // Record notification in transfer (saves once)
+      await transfer.addNotificationRecord(
         'whatsapp',
         message,
         transfer.customer_details.contact_number
       );
-      await transfer.save();
     } catch (notificationError) {
       console.error('Failed to send driver assignment notification:', notificationError);
       // Don't fail the request if notification fails
+    }
+
+    // In-app: notify client that driver was assigned
+    try {
+      await notifyClientDriverAssigned(transfer);
+    } catch (notifErr) {
+      console.error('In-app notification (driver assigned) failed:', notifErr);
     }
 
     res.json({
@@ -754,11 +902,11 @@ const getTransferStats = async (req, res) => {
   }
 };
 
-// Update client details (flight info, passengers, luggage, notes)
+// Update client details (flight info, passengers, luggage, notes, delegate fields)
 const updateClientDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const { flight_details, customer_details, transfer_details } = req.body;
+    const { flight_details, customer_details, transfer_details, traveler_details, traveler_flight_details, delegates } = req.body;
     const userId = req.user._id;
     const userRole = req.user.role;
 
@@ -782,16 +930,78 @@ const updateClientDetails = async (req, res) => {
     // Update the transfer fields
     if (flight_details) {
       transfer.flight_details = {
-        ...transfer.flight_details,
+        ...transfer.flight_details.toObject ? transfer.flight_details.toObject() : transfer.flight_details,
         ...flight_details
       };
     }
 
     if (customer_details) {
       transfer.customer_details = {
-        ...transfer.customer_details,
+        ...transfer.customer_details.toObject ? transfer.customer_details.toObject() : transfer.customer_details,
         ...customer_details
       };
+    }
+
+    if (traveler_details !== undefined) {
+      if (traveler_details === null) {
+        transfer.traveler_details = null;
+      } else {
+        transfer.traveler_details = {
+          ...(transfer.traveler_details && (transfer.traveler_details.toObject ? transfer.traveler_details.toObject() : transfer.traveler_details)),
+          ...traveler_details
+        };
+      }
+    }
+
+    if (traveler_flight_details !== undefined) {
+      if (traveler_flight_details === null) {
+        transfer.traveler_flight_details = null;
+      } else {
+        const existing = transfer.traveler_flight_details && (transfer.traveler_flight_details.toObject ? transfer.traveler_flight_details.toObject() : transfer.traveler_flight_details);
+        transfer.traveler_flight_details = { ...existing, ...traveler_flight_details };
+      }
+    }
+
+    // When Delegate 2 flight same as Delegate 1, copy from flight_details
+    if (transfer.traveler_details && transfer.traveler_details.flight_same_as_delegate_1 === true && transfer.flight_details) {
+      transfer.traveler_flight_details = {
+        flight_no: transfer.flight_details.flight_no,
+        airline: transfer.flight_details.airline,
+        departure_airport: transfer.flight_details.departure_airport,
+        arrival_airport: transfer.flight_details.arrival_airport,
+        departure_time: transfer.flight_details.departure_time,
+        arrival_time: transfer.flight_details.arrival_time,
+        status: transfer.flight_details.status || 'on_time',
+        delay_minutes: transfer.flight_details.delay_minutes ?? 0,
+        gate: transfer.flight_details.gate,
+        terminal: transfer.flight_details.terminal
+      };
+    }
+
+    if (Array.isArray(delegates)) {
+      const primaryFlight = transfer.flight_details;
+      transfer.delegates = delegates.map((d) => {
+        const entry = {
+          traveler_id: mongoose.Types.ObjectId.isValid(d.traveler_id) ? new mongoose.Types.ObjectId(d.traveler_id) : d.traveler_id,
+          flight_same_as_primary: d.flight_same_as_primary !== false,
+          flight_details: d.flight_details || null
+        };
+        if (entry.flight_same_as_primary && primaryFlight) {
+          entry.flight_details = {
+            flight_no: primaryFlight.flight_no,
+            airline: primaryFlight.airline,
+            departure_airport: primaryFlight.departure_airport,
+            arrival_airport: primaryFlight.arrival_airport,
+            departure_time: primaryFlight.departure_time,
+            arrival_time: primaryFlight.arrival_time,
+            status: primaryFlight.status || 'on_time',
+            delay_minutes: primaryFlight.delay_minutes ?? 0,
+            gate: primaryFlight.gate,
+            terminal: primaryFlight.terminal
+          };
+        }
+        return entry;
+      });
     }
 
     if (transfer_details && transfer_details.special_notes !== undefined) {
@@ -893,5 +1103,6 @@ module.exports = {
   deleteTransfer,
   getTransferStats,
   updateClientDetails,
-  assignTraveler
+  assignTraveler,
+  assignVendor
 };
