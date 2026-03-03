@@ -30,6 +30,10 @@ const hotelRoutes = require('./routes/hotels');
 const travelAdvisoryRoutes = require('./routes/travelAdvisory');
 const hotelPdfRoutes = require('./routes/hotelPdf');
 const inAppNotificationRoutes = require('./routes/inAppNotifications');
+const operationsRoutes = require('./routes/operations');
+const systemRoutes = require('./routes/system');
+const settingsRoutes = require('./routes/settings');
+const bulkOperationsRoutes = require('./routes/bulk-operations');
 
 // Import services
 const cronService = require('./services/cronService');
@@ -153,6 +157,10 @@ app.get('/health', healthCheckHandler);
 // API routes (with /api prefix - standard configuration)
 // These routes work when frontend calls: https://backend.com/api/transfers
 app.use('/api/auth', authRoutes);
+app.use('/api/operations', operationsRoutes);
+app.use('/api/system', systemRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/bulk-operations', bulkOperationsRoutes);
 app.use('/api/transfers', transferRoutes);
 app.use('/api/tracking', trackingRoutes);
 app.use('/api/vendors', vendorRoutes);
@@ -175,6 +183,10 @@ app.use('/api/in-app-notifications', inAppNotificationRoutes);
 // 2. Frontend is configured to call routes without /api (e.g., https://backend.com/transfers)
 // 3. Cluster environment routes requests differently
 app.use('/auth', authRoutes);
+app.use('/operations', operationsRoutes);
+app.use('/system', systemRoutes);
+app.use('/settings', settingsRoutes);
+app.use('/bulk-operations', bulkOperationsRoutes);
 app.use('/transfers', transferRoutes);
 app.use('/tracking', trackingRoutes);
 app.use('/vendors', vendorRoutes);

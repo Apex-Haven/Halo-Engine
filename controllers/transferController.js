@@ -3,6 +3,8 @@ const User = require('../models/User');
 const mongoose = require('mongoose');
 const { sendTemplatedEmail: sendSendGridEmail } = require('../config/sendgrid');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
+const googleSheetsSyncService = require('../services/googleSheetsSyncService');
+const { enrichFlightDetails } = require('../services/flightEnrichmentHelper');
 const moment = require('moment');
 const {
   notifyAdminsTransferCreated,
@@ -120,6 +122,30 @@ const createTransfer = async (req, res) => {
             terminal: transferData.flight_details.terminal
           }
           : null;
+      }
+    }
+
+    // Auto-fetch flight data from Aviationstack when flight_no exists
+    if (transferData.flight_details?.flight_no) {
+      try {
+        const enriched = await enrichFlightDetails(
+          transferData.flight_details,
+          transferData.flight_details.arrival_time || transferData.flight_details.departure_time
+        );
+        if (enriched) transferData.flight_details = enriched;
+      } catch (e) {
+        console.warn('Flight enrichment failed:', e.message);
+      }
+    }
+    if (transferData.traveler_flight_details?.flight_no && transferData.traveler_flight_details !== transferData.flight_details) {
+      try {
+        const enriched = await enrichFlightDetails(
+          transferData.traveler_flight_details,
+          transferData.traveler_flight_details.arrival_time || transferData.traveler_flight_details.departure_time
+        );
+        if (enriched) transferData.traveler_flight_details = enriched;
+      } catch (e) {
+        console.warn('Traveler flight enrichment failed:', e.message);
       }
     }
 
@@ -906,7 +932,7 @@ const getTransferStats = async (req, res) => {
 const updateClientDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const { flight_details, customer_details, transfer_details, traveler_details, traveler_flight_details, delegates } = req.body;
+    const { flight_details, customer_details, transfer_details, traveler_details, traveler_flight_details, delegates, return_flight_details, return_transfer_details } = req.body;
     const userId = req.user._id;
     const userRole = req.user.role;
 
@@ -1011,6 +1037,27 @@ const updateClientDetails = async (req, res) => {
       };
     }
 
+    if (return_flight_details !== undefined) {
+      if (return_flight_details === null) {
+        transfer.return_flight_details = null;
+      } else {
+        transfer.return_flight_details = {
+          ...(transfer.return_flight_details && (transfer.return_flight_details.toObject ? transfer.return_flight_details.toObject() : transfer.return_flight_details)),
+          ...return_flight_details
+        };
+      }
+    }
+    if (return_transfer_details !== undefined) {
+      if (return_transfer_details === null) {
+        transfer.return_transfer_details = null;
+      } else {
+        transfer.return_transfer_details = {
+          ...(transfer.return_transfer_details && (transfer.return_transfer_details.toObject ? transfer.return_transfer_details.toObject() : transfer.return_transfer_details)),
+          ...return_transfer_details
+        };
+      }
+    }
+
     // Add audit log entry
     transfer.audit_log.push({
       action: 'client_details_updated',
@@ -1092,6 +1139,76 @@ const assignTraveler = async (req, res) => {
   }
 };
 
+// Sync transfers from event registration Google Sheet
+const syncTransfersFromRegistrationSheet = async (req, res) => {
+  try {
+    const { sheetId, sheetName, customerId } = req.body;
+    const user = req.user;
+
+    if (!sheetId || typeof sheetId !== 'string' || !sheetId.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'sheetId is required'
+      });
+    }
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    let resolvedCustomerId;
+
+    if (user.role === 'CLIENT') {
+      resolvedCustomerId = user._id;
+    } else if (user.role === 'SUPER_ADMIN' || user.role === 'ADMIN' || user.role === 'OPERATIONS_MANAGER') {
+      if (!customerId) {
+        return res.status(400).json({
+          success: false,
+          message: 'customerId is required for admin users'
+        });
+      }
+      if (!mongoose.Types.ObjectId.isValid(customerId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid customerId format',
+          error: 'customerId must be a valid MongoDB ObjectId (24 hex characters)'
+        });
+      }
+      resolvedCustomerId = new mongoose.Types.ObjectId(customerId);
+    } else {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to run this sync'
+      });
+    }
+
+    const results = await googleSheetsSyncService.syncTransfersFromRegistrationSheet(
+      sheetId.trim(),
+      sheetName && String(sheetName).trim() ? String(sheetName).trim() : '',
+      resolvedCustomerId,
+      user._id
+    );
+
+    const statusCode = results.success === false ? 400 : 200;
+
+    return res.status(statusCode).json({
+      success: results.success !== false,
+      message: results.message,
+      data: results
+    });
+  } catch (error) {
+    console.error('Error syncing transfers from registration sheet:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to sync transfers from registration sheet',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createTransfer,
   getTransfer,
@@ -1104,5 +1221,6 @@ module.exports = {
   getTransferStats,
   updateClientDetails,
   assignTraveler,
-  assignVendor
+  assignVendor,
+  syncTransfersFromRegistrationSheet
 };

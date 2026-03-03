@@ -14,7 +14,8 @@ const {
   deleteTransfer,
   getTransferStats,
   updateClientDetails,
-  assignTraveler
+  assignTraveler,
+  syncTransfersFromRegistrationSheet
 } = require('../controllers/transferController');
 
 // Import validation middleware
@@ -31,9 +32,20 @@ const {
 const { 
   authenticate, 
   authorize, 
-  requirePermission, 
   authorizeResource 
 } = require('../middleware/auth');
+
+/**
+ * @route   POST /api/transfers/sync-from-registration-sheet
+ * @desc    Sync transfers from event registration Google Sheet
+ * @access  Private (Client for self, Admin/Operations for specified customer)
+ */
+router.post(
+  '/sync-from-registration-sheet',
+  authenticate,
+  authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CLIENT'),
+  syncTransfersFromRegistrationSheet
+);
 
 /**
  * @route   POST /api/transfers
@@ -114,9 +126,9 @@ router.put('/:id/traveler', authenticate, validateApexId, assignTraveler);
 
 /**
  * @route   DELETE /api/transfers/:id
- * @desc    Delete transfer (Admin: any; Client: own only)
- * @access  Private (Super Admin, Admin, Client for own)
+ * @desc    Delete transfer (Admin/Operations: any; Client: own only)
+ * @access  Private (Super Admin, Admin, Operations Manager, Client for own)
  */
-router.delete('/:id', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'CLIENT'), authorizeResource('transfer'), deleteTransfer);
+router.delete('/:id', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CLIENT'), authorizeResource('transfer'), deleteTransfer);
 
 module.exports = router;

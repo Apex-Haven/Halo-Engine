@@ -110,7 +110,7 @@ const flightDetailsSchema = new mongoose.Schema({
   status: {
     type: String,
     required: true,
-    enum: ['on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed'],
+    enum: ['on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed', 'enroute'],
     default: 'on_time'
   },
   delay_minutes: {
@@ -118,6 +118,8 @@ const flightDetailsSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  api_verified: { type: Boolean, default: false },
+  last_checked: { type: Date },
   gate: {
     type: String,
     trim: true,
@@ -350,6 +352,16 @@ const transferSchema = new mongoose.Schema({
   transfer_details: {
     type: transferDetailsSchema,
     required: true
+  },
+  return_flight_details: {
+    type: flightDetailsSchema,
+    required: false,
+    default: null
+  },
+  return_transfer_details: {
+    type: transferDetailsSchema,
+    required: false,
+    default: null
   },
   vendor_details: {
     type: vendorDetailsSchema,

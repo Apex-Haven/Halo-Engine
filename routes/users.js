@@ -73,7 +73,7 @@ router.get('/', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, r
  * @desc    Get all vendors
  * @access  Private (Super Admin/Admin only)
  */
-router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+router.get('/vendors', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     const vendors = await User.find({ role: 'VENDOR' })
       .select('-password')

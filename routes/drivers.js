@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const User = require('../models/User');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -9,7 +10,7 @@ const googleSheetsSyncService = require('../services/googleSheetsSyncService');
  * @desc    Get all drivers for the logged-in vendor
  * @access  Private (VENDOR role only)
  */
-router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER']), async (req, res) => {
   try {
     let query = { role: 'DRIVER' };
 
@@ -17,6 +18,16 @@ router.get('/', authenticate, authorize(['VENDOR', 'SUPER_ADMIN', 'ADMIN']), asy
     if (req.user.role === 'VENDOR') {
       query.vendorId = req.user._id.toString();
       query.createdBy = req.user._id;
+    } else if (req.user.role === 'SUPER_ADMIN' || req.user.role === 'ADMIN') {
+      // Filter by vendor when vendorId query param provided
+      const vendorId = req.query.vendorId;
+      if (vendorId) {
+        const vendorObjId = mongoose.Types.ObjectId.isValid(vendorId) ? new mongoose.Types.ObjectId(vendorId) : null;
+        query.$or = [
+          { vendorId: vendorId.toString() },
+          ...(vendorObjId ? [{ createdBy: vendorObjId }] : [])
+        ];
+      }
     }
 
     const drivers = await User.find(query)

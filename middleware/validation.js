@@ -249,6 +249,27 @@ const createTransferSchema = Joi.object({
       })
   }).required(),
 
+  return_flight_details: Joi.object({
+    flight_no: commonSchemas.flightNumber,
+    airline: Joi.string().trim().min(2).max(50).required(),
+    departure_airport: commonSchemas.airportCode,
+    arrival_airport: commonSchemas.airportCode,
+    departure_time: commonSchemas.dateTime,
+    arrival_time: commonSchemas.dateTime,
+    status: Joi.string().valid('on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed').default('on_time'),
+    delay_minutes: Joi.number().integer().min(0).default(0),
+    gate: Joi.string().trim().max(10).allow('', null),
+    terminal: Joi.string().trim().max(10).allow('', null)
+  }).optional().allow(null),
+
+  return_transfer_details: Joi.object({
+    pickup_location: Joi.string().trim().min(5).max(200).required(),
+    drop_location: Joi.string().trim().min(5).max(200).required(),
+    event_place: Joi.string().trim().min(5).max(200).required(),
+    estimated_pickup_time: commonSchemas.dateTime,
+    special_notes: Joi.string().trim().max(500).allow('', null)
+  }).optional().allow(null),
+
   // Optional: set by backend when vendor_id provided, or by admin via PUT /:id/vendor
   vendor_details: Joi.object({
     vendor_id: commonSchemas.vendorId,
@@ -279,7 +300,11 @@ const createTransferSchema = Joi.object({
     .messages({
       'string.max': 'Internal notes cannot exceed 1000 characters'
     })
-}).unknown(true); // Allow additional fields like assigned_driver_details
+})
+  // Business rule: return leg is all-or-nothing
+  // (if one return_* block is provided, require the other too)
+  .and('return_flight_details', 'return_transfer_details')
+  .unknown(true); // Allow additional fields like assigned_driver_details
 
 // Driver assignment schema
 const assignDriverSchema = Joi.object({
@@ -647,8 +672,8 @@ const queryParamsSchema = Joi.object({
   limit: Joi.number()
     .integer()
     .min(1)
-    .max(100)
-    .default(10),
+    .max(500)
+    .default(50),
   
   status: Joi.string()
     .valid('pending', 'assigned', 'enroute', 'waiting', 'in_progress', 'completed', 'cancelled'),
