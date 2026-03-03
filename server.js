@@ -34,6 +34,7 @@ const operationsRoutes = require('./routes/operations');
 const systemRoutes = require('./routes/system');
 const settingsRoutes = require('./routes/settings');
 const bulkOperationsRoutes = require('./routes/bulk-operations');
+const chatRoutes = require('./routes/chat');
 
 // Import services
 const cronService = require('./services/cronService');
@@ -161,6 +162,7 @@ app.use('/api/operations', operationsRoutes);
 app.use('/api/system', systemRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/bulk-operations', bulkOperationsRoutes);
+app.use('/api/chat', chatRoutes);
 app.use('/api/transfers', transferRoutes);
 app.use('/api/tracking', trackingRoutes);
 app.use('/api/vendors', vendorRoutes);

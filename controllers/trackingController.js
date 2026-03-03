@@ -319,52 +319,34 @@ const generateMockDriverLocation = (transfer) => {
 };
 
 const generateProgressSteps = (transfer) => {
-  const currentStatus = transfer.transfer_details.transfer_status || transfer.transfer_details.status;
-  
+  const onwardStatus = transfer.transfer_details?.transfer_status || transfer.transfer_details?.status || 'pending';
+  const returnStatus = transfer.return_transfer_details?.transfer_status || transfer.return_transfer_details?.status || 'pending';
+  const hasDriver = !!transfer.assigned_driver_details;
+  const onwardCompleted = onwardStatus === 'completed';
+  const hasReturn = !!(transfer.return_transfer_details || transfer.return_flight_details);
+  const returnDriverAssigned = hasReturn && returnStatus && returnStatus !== 'pending';
+  const returnCompleted = hasReturn && returnStatus === 'completed';
+  const allCompleted = onwardCompleted && (!hasReturn || returnCompleted);
+
   const steps = [
-    { 
-      id: 1, 
-      title: 'Transfer Requested', 
-      description: 'Your transfer request has been received',
-      status: 'completed',
-      timestamp: new Date(transfer.createdAt || new Date())
-    },
-    { 
-      id: 2, 
-      title: 'Driver Assigned', 
-      description: 'Driver has been assigned to your transfer',
-      status: transfer.assigned_driver_details ? 'completed' : 'pending',
-      timestamp: transfer.assigned_driver_details ? new Date() : null
-    },
-    { 
-      id: 3, 
-      title: 'Driver En Route', 
-      description: 'Driver is on the way to pickup location',
-      status: currentStatus === 'in_progress' ? 'in_progress' : 'pending',
-      timestamp: currentStatus === 'in_progress' ? new Date() : null
-    },
-    { 
-      id: 4, 
-      title: 'Arrived at Pickup', 
-      description: 'Driver has arrived at pickup location',
-      status: 'pending',
-      timestamp: null
-    },
-    { 
-      id: 5, 
-      title: 'Transfer Started', 
-      description: 'Transfer has begun',
-      status: 'pending',
-      timestamp: null
-    },
-    { 
-      id: 6, 
-      title: 'Transfer Completed', 
-      description: 'You have reached your destination',
-      status: currentStatus === 'completed' ? 'completed' : 'pending',
-      timestamp: currentStatus === 'completed' ? new Date() : null
-    }
+    { id: 1, title: 'Transfer Requested', description: 'Your transfer request has been received', status: 'completed', timestamp: new Date(transfer.createdAt || new Date()) },
+    { id: 2, title: 'Driver Assigned (Arrival)', description: hasDriver ? `Driver: ${transfer.assigned_driver_details?.name || 'N/A'}` : 'Vendor will assign a driver', status: hasDriver ? 'completed' : 'pending', timestamp: hasDriver ? new Date() : null },
+    { id: 3, title: 'Transfer Started', description: 'Transfer has begun', status: hasDriver ? 'completed' : 'pending', timestamp: hasDriver ? new Date() : null },
+    { id: 4, title: 'Arrival Transfer Completed', description: 'You have reached your destination', status: onwardCompleted ? 'completed' : 'pending', timestamp: onwardCompleted ? new Date() : null }
   ];
+
+  if (hasReturn) {
+    steps.push(
+      { id: 5, title: 'Departure Driver Assigned', description: returnDriverAssigned ? 'Driver confirmed for return' : 'Driver will be assigned for return', status: returnDriverAssigned ? 'completed' : 'pending', timestamp: returnDriverAssigned ? new Date() : null },
+      { id: 6, title: 'Departure Completed', description: 'Return leg completed', status: returnCompleted ? 'completed' : 'pending', timestamp: returnCompleted ? new Date() : null },
+      { id: 7, title: 'Transfer Completed', description: 'Your round trip is complete', status: allCompleted ? 'completed' : 'pending', timestamp: allCompleted ? new Date() : null }
+    );
+  } else {
+    steps[3].title = 'Transfer Completed';
+    steps[3].description = 'You have reached your destination';
+    steps[3].status = onwardCompleted ? 'completed' : 'pending';
+    steps[3].timestamp = onwardCompleted ? new Date() : null;
+  }
 
   return steps;
 };
