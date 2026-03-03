@@ -390,6 +390,10 @@ const transferSchema = new mongoose.Schema({
     type: assignedDriverDetailsSchema,
     default: null
   },
+  return_assigned_driver_details: {
+    type: assignedDriverDetailsSchema,
+    default: null
+  },
   notifications: {
     type: notificationsSchema,
     default: () => ({})

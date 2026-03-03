@@ -333,8 +333,8 @@ router.get('/vendor/:vendorId', authenticate, authorize(['SUPER_ADMIN', 'ADMIN',
   }
 });
 
-// Update transfer status
-router.patch('/transfer/:transferId/status', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'DRIVER']), async (req, res) => {
+// Update transfer status (Admin and Vendor only - driver cannot self-update)
+router.patch('/transfer/:transferId/status', authenticate, authorize(['SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR']), async (req, res) => {
   try {
     const { transferId } = req.params;
     const { status, notes } = req.body;

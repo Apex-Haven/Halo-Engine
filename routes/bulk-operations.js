@@ -4,11 +4,11 @@ const Transfer = require('../models/Transfer');
 const User = require('../models/User');
 const { authenticate } = require('../middleware/auth');
 
-// Bulk update transfer status
+// Bulk update transfer status (onward or return leg)
 router.put('/status', authenticate, async (req, res) => {
   try {
-    const { transferIds, newStatus } = req.body;
-    
+    const { transferIds, newStatus, leg = 'onward' } = req.body;
+
     if (!transferIds || !Array.isArray(transferIds) || transferIds.length === 0) {
       return res.status(400).json({
         success: false,
@@ -23,26 +23,44 @@ router.put('/status', authenticate, async (req, res) => {
       });
     }
 
-    // Update transfers
+    if (!['onward', 'return'].includes(leg)) {
+      return res.status(400).json({
+        success: false,
+        message: 'leg must be onward or return'
+      });
+    }
+
+    const legLabel = leg === 'return' ? 'return' : 'onward';
+    const statusField = leg === 'return'
+      ? 'return_transfer_details.transfer_status'
+      : 'transfer_details.transfer_status';
+
+    const filter = { _id: { $in: transferIds } };
+    if (leg === 'return') {
+      filter.return_transfer_details = { $exists: true, $ne: null };
+    }
+
     const result = await Transfer.updateMany(
-      { _id: { $in: transferIds } },
-      { 
-        'transfer_details.transfer_status': newStatus,
+      filter,
+      {
+        $set: { [statusField]: newStatus },
         $push: {
           audit_log: {
             action: 'status_changed',
             timestamp: new Date(),
             by: req.user.email,
-            details: `Bulk status changed to ${newStatus}`
+            details: `${legLabel} leg bulk status changed to ${newStatus}`
           }
         }
       }
     );
 
+    const skipped = transferIds.length - result.modifiedCount;
     res.json({
       success: true,
-      message: `Updated ${result.modifiedCount} transfers to ${newStatus}`,
-      updatedCount: result.modifiedCount
+      message: `Updated ${result.modifiedCount} ${leg} leg(s) to ${newStatus}${skipped > 0 ? `. ${skipped} skipped (no ${leg} leg)` : ''}`,
+      updatedCount: result.modifiedCount,
+      skipped
     });
   } catch (error) {
     console.error('Error in bulk status update:', error);
@@ -146,6 +164,9 @@ router.put('/driver', authenticate, async (req, res) => {
       });
     }
 
+    // E.164 placeholder when phone missing/invalid (schema requires valid format)
+    const contactNumber = (driverPhone && /^\+[1-9]\d{1,14}$/.test(driverPhone)) ? driverPhone : '+10000000000';
+
     // Check for conflicts - overlapping time slots for same driver
     const conflictingTransfers = await Transfer.find({
       _id: { $in: transferIds },
@@ -165,17 +186,22 @@ router.put('/driver', authenticate, async (req, res) => {
       });
     }
 
-    // Update transfers with driver details
+    // Update transfers with driver details - set full object (assigned_driver_details can be null)
+    const assignedDriverDetails = {
+      driver_id: driverId,
+      name: driverName,
+      contact_number: contactNumber,
+      vehicle_type: vehicleType || 'sedan',
+      vehicle_number: vehicleNumber || 'TBD',
+      assigned_at: new Date()
+    };
     const result = await Transfer.updateMany(
       { _id: { $in: transferIds } },
       { 
-        'assigned_driver_details.driver_id': driverId,
-        'assigned_driver_details.name': driverName,
-        'assigned_driver_details.phone': driverPhone || '',
-        'assigned_driver_details.vehicle_type': vehicleType || '',
-        'assigned_driver_details.vehicle_number': vehicleNumber || '',
-        'assigned_driver_details.assigned_at': new Date(),
-        'transfer_details.transfer_status': 'assigned',
+        $set: {
+          assigned_driver_details: assignedDriverDetails,
+          'transfer_details.transfer_status': 'assigned'
+        },
         $push: {
           audit_log: {
             action: 'driver_assigned',
@@ -196,7 +222,77 @@ router.put('/driver', authenticate, async (req, res) => {
     console.error('Error in bulk driver assignment:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to assign driver'
+      message: 'Failed to assign driver',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Bulk assign return driver (round-trip only; onward must be completed first)
+router.put('/return-driver', authenticate, async (req, res) => {
+  try {
+    const { transferIds, driverId, driverName, driverPhone, vehicleType, vehicleNumber } = req.body;
+
+    if (!transferIds || !Array.isArray(transferIds) || transferIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transfer IDs are required'
+      });
+    }
+
+    if (!driverId || !driverName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Driver ID and name are required'
+      });
+    }
+
+    const contactNumber = (driverPhone && /^\+[1-9]\d{1,14}$/.test(driverPhone)) ? driverPhone : '+10000000000';
+    const assignedDriverDetails = {
+      driver_id: driverId,
+      name: driverName,
+      contact_number: contactNumber,
+      vehicle_type: vehicleType || 'sedan',
+      vehicle_number: vehicleNumber || 'TBD',
+      assigned_at: new Date()
+    };
+
+    // Only update transfers that have return leg AND onward is completed
+    const result = await Transfer.updateMany(
+      {
+        _id: { $in: transferIds },
+        return_transfer_details: { $exists: true, $ne: null },
+        'transfer_details.transfer_status': 'completed'
+      },
+      {
+        $set: {
+          return_assigned_driver_details: assignedDriverDetails,
+          'return_transfer_details.transfer_status': 'assigned'
+        },
+        $push: {
+          audit_log: {
+            action: 'driver_assigned',
+            timestamp: new Date(),
+            by: req.user.email,
+            details: `Return driver ${driverName} assigned`
+          }
+        }
+      }
+    );
+
+    const skipped = transferIds.length - result.modifiedCount;
+    res.json({
+      success: true,
+      message: `Assigned return driver to ${result.modifiedCount} transfer(s)${skipped > 0 ? `. ${skipped} skipped (onward not completed or no return leg)` : ''}`,
+      updatedCount: result.modifiedCount,
+      skipped
+    });
+  } catch (error) {
+    console.error('Error in bulk return driver assignment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign return driver',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

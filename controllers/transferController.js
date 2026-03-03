@@ -643,6 +643,101 @@ const assignDriver = async (req, res) => {
   }
 };
 
+// Assign return driver (for round-trip; onward leg must be completed first)
+const assignReturnDriver = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const driverDetails = req.body;
+
+    const transfer = await Transfer.findById(id);
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found',
+        apexId: id
+      });
+    }
+
+    if (!transfer.return_transfer_details) {
+      return res.status(400).json({
+        success: false,
+        message: 'This transfer has no return leg'
+      });
+    }
+
+    const onwardStatus = transfer.transfer_details?.transfer_status || 'pending';
+    if (onwardStatus !== 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Onward transfer must be completed before assigning return driver. Current onward status: ' + onwardStatus
+      });
+    }
+
+    if (req.user && req.user.role === 'VENDOR') {
+      const userIdString = req.user._id.toString();
+      const vendorIdString = (transfer.vendor_details && transfer.vendor_details.vendor_id)
+        ? String(transfer.vendor_details.vendor_id)
+        : null;
+      if (!vendorIdString || vendorIdString !== userIdString) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. This transfer does not belong to your vendor account.'
+        });
+      }
+    }
+
+    const contactNumber = (driverDetails.contact_number && /^\+[1-9]\d{1,14}$/.test(driverDetails.contact_number))
+      ? driverDetails.contact_number
+      : '+10000000000';
+
+    transfer.return_assigned_driver_details = {
+      driver_id: driverDetails.driver_id,
+      name: driverDetails.name,
+      contact_number: contactNumber,
+      vehicle_type: driverDetails.vehicle_type || 'sedan',
+      vehicle_number: driverDetails.vehicle_number || 'TBD',
+      assigned_at: new Date()
+    };
+    transfer.return_transfer_details.transfer_status = 'assigned';
+    transfer.addAuditLog('driver_assigned', req.user ? `user:${req.user._id}` : 'api', `Return driver ${driverDetails.name} assigned`);
+    await transfer.save();
+
+    try {
+      const message = MESSAGE_TEMPLATES.driverAssigned(
+        transfer.customer_details.name,
+        driverDetails.name,
+        driverDetails.vehicle_type || 'sedan',
+        driverDetails.vehicle_number || 'TBD',
+        transfer.return_transfer_details.pickup_location,
+        moment(transfer.return_transfer_details.estimated_pickup_time).format('MMMM Do YYYY, h:mm A')
+      );
+      await sendNotification(transfer.customer_details.contact_number, message, 'whatsapp');
+      await transfer.addNotificationRecord('whatsapp', message, transfer.customer_details.contact_number);
+    } catch (notificationError) {
+      console.error('Return driver assignment notification failed:', notificationError);
+    }
+
+    try {
+      await notifyClientDriverAssigned(transfer);
+    } catch (notifErr) {
+      console.error('In-app notification (return driver assigned) failed:', notifErr);
+    }
+
+    res.json({
+      success: true,
+      message: 'Return driver assigned successfully',
+      data: transfer
+    });
+  } catch (error) {
+    console.error('Error assigning return driver:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign return driver',
+      error: error.message
+    });
+  }
+};
+
 // Update driver status
 const updateDriverStatus = async (req, res) => {
   try {
@@ -1215,6 +1310,7 @@ module.exports = {
   getTransfers,
   updateTransfer,
   assignDriver,
+  assignReturnDriver,
   updateDriverStatus,
   confirmTravelerPickup,
   deleteTransfer,

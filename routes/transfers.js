@@ -9,6 +9,7 @@ const {
   updateTransfer,
   assignVendor,
   assignDriver,
+  assignReturnDriver,
   updateDriverStatus,
   confirmTravelerPickup,
   deleteTransfer,
@@ -97,11 +98,18 @@ router.put('/:id/vendor', authenticate, validateApexId, authorize('SUPER_ADMIN',
 router.put('/:id/driver', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR'), authorizeResource('transfer'), validateDriverAssignment, assignDriver);
 
 /**
- * @route   PUT /api/transfers/:id/driver/status
- * @desc    Update driver status
- * @access  Private (Driver, Vendor Manager, Admin)
+ * @route   PUT /api/transfers/:id/return-driver
+ * @desc    Assign driver for return leg (round-trip only; onward must be completed first)
+ * @access  Private (Admin, Operations Manager, Vendor Manager, Vendor)
  */
-router.put('/:id/driver/status', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'DRIVER'), authorizeResource('transfer'), validateDriverStatusUpdate, updateDriverStatus);
+router.put('/:id/return-driver', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR'), authorizeResource('transfer'), validateDriverAssignment, assignReturnDriver);
+
+/**
+ * @route   PUT /api/transfers/:id/driver/status
+ * @desc    Update driver/transfer status (Admin and Vendor only - driver cannot self-update)
+ * @access  Private (Vendor Manager, Admin, Vendor)
+ */
+router.put('/:id/driver/status', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR'), authorizeResource('transfer'), validateDriverStatusUpdate, updateDriverStatus);
 
 /**
  * @route   PUT /api/transfers/:id/driver/confirm
