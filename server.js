@@ -189,6 +189,7 @@ app.use('/operations', operationsRoutes);
 app.use('/system', systemRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/bulk-operations', bulkOperationsRoutes);
+app.use('/chat', chatRoutes);
 app.use('/transfers', transferRoutes);
 app.use('/tracking', trackingRoutes);
 app.use('/vendors', vendorRoutes);
