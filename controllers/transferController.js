@@ -125,7 +125,7 @@ const createTransfer = async (req, res) => {
       }
     }
 
-    // Auto-fetch flight data from Aviationstack when flight_no exists
+    // Auto-fetch flight data from FlightStats when flight_no exists
     if (transferData.flight_details?.flight_no) {
       try {
         const enriched = await enrichFlightDetails(
@@ -1237,7 +1237,7 @@ const assignTraveler = async (req, res) => {
 // Sync transfers from event registration Google Sheet
 const syncTransfersFromRegistrationSheet = async (req, res) => {
   try {
-    const { sheetId, sheetName, customerId } = req.body;
+    const { sheetId, sheetName, customerId, gid } = req.body;
     const user = req.user;
 
     if (!sheetId || typeof sheetId !== 'string' || !sheetId.trim()) {
@@ -1280,11 +1280,13 @@ const syncTransfersFromRegistrationSheet = async (req, res) => {
       });
     }
 
+    const sheetGid = gid != null ? parseInt(gid, 10) : 0;
     const results = await googleSheetsSyncService.syncTransfersFromRegistrationSheet(
       sheetId.trim(),
       sheetName && String(sheetName).trim() ? String(sheetName).trim() : '',
       resolvedCustomerId,
-      user._id
+      user._id,
+      Number.isNaN(sheetGid) ? 0 : sheetGid
     );
 
     const statusCode = results.success === false ? 400 : 200;

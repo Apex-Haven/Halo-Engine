@@ -368,18 +368,34 @@ router.post('/check-conflicts', authenticate, async (req, res) => {
 // Bulk delete transfers
 router.delete('/', authenticate, async (req, res) => {
   try {
-    const { transferIds } = req.body;
-    
-    if (!transferIds || !Array.isArray(transferIds) || transferIds.length === 0) {
+    const { transferIds, deleteAllBulk } = req.body;
+
+    let idsToDelete = [];
+
+    if (deleteAllBulk === true) {
+      // Delete all transfers the user can access (respecting role)
+      const filter = {};
+      if (req.user?.role === 'VENDOR') {
+        filter['vendor_details.vendor_id'] = req.user._id.toString();
+      } else if (req.user?.role === 'CLIENT') {
+        filter.customer_id = req.user._id;
+      }
+      const docs = await Transfer.find(filter, { _id: 1 }).lean();
+      idsToDelete = docs.map((d) => d._id);
+    } else if (transferIds && Array.isArray(transferIds) && transferIds.length > 0) {
+      idsToDelete = transferIds;
+    }
+
+    if (idsToDelete.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Transfer IDs are required'
+        message: 'Transfer IDs are required, or use deleteAllBulk: true'
       });
     }
 
     // Check if any transfers are in progress
     const activeTransfers = await Transfer.find({
-      _id: { $in: transferIds },
+      _id: { $in: idsToDelete },
       'transfer_details.transfer_status': { $in: ['enroute', 'in_progress'] }
     });
 
@@ -390,7 +406,7 @@ router.delete('/', authenticate, async (req, res) => {
       });
     }
 
-    const result = await Transfer.deleteMany({ _id: { $in: transferIds } });
+    const result = await Transfer.deleteMany({ _id: { $in: idsToDelete } });
 
     res.json({
       success: true,

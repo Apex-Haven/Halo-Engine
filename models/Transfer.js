@@ -68,7 +68,9 @@ const customerDetailsSchema = new mongoose.Schema({
   consent_email: { type: Boolean, default: null },
   consent_whatsapp: { type: Boolean, default: null },
   whatsapp_number: { type: String, trim: true, maxlength: 20 },
-  flight_booked: { type: Boolean, default: null }
+  flight_booked: { type: Boolean, default: null },
+  name_as_per_passport: { type: String, trim: true, maxlength: 150 },
+  passport_number: { type: String, trim: true, maxlength: 50 }
 }, { _id: false });
 
 const flightDetailsSchema = new mongoose.Schema({
@@ -297,13 +299,14 @@ const travelerDetailsSchema = new mongoose.Schema({
   name: { type: String, trim: true, maxlength: 100 },
   email: { type: String, lowercase: true, trim: true },
   contact_number: { type: String, trim: true },
-  // Delegate 2 optional fields
   job_position: { type: String, trim: true, maxlength: 100 },
   company_name: { type: String, trim: true, maxlength: 200 },
   consent_email: { type: Boolean, default: null },
   consent_whatsapp: { type: Boolean, default: null },
   whatsapp_number: { type: String, trim: true, maxlength: 20 },
-  flight_same_as_delegate_1: { type: Boolean, default: null }
+  flight_same_as_delegate_1: { type: Boolean, default: null },
+  name_as_per_passport: { type: String, trim: true, maxlength: 150 },
+  passport_number: { type: String, trim: true, maxlength: 50 }
 }, { _id: false });
 
 // Delegate 2 flight (mirrors flight_details when flight_same_as_delegate_1 is false)

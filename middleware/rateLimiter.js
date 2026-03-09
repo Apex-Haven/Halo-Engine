@@ -75,10 +75,11 @@ const createRateLimiter = (options = {}) => {
 
 /**
  * General API rate limiter (applied to all routes)
+ * Configure via RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX_REQUESTS
  */
 const generalLimiter = createRateLimiter({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (process.env.NODE_ENV === 'production' ? 100 : 1000),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (process.env.NODE_ENV === 'production' ? 500 : 1000),
   message: 'Too many requests, please try again later.',
   keyGenerator: (req) => {
     // In development, be more lenient with localhost

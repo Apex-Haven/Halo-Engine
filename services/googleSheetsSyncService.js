@@ -2,7 +2,7 @@ const axios = require('axios');
 const User = require('../models/User');
 const Transfer = require('../models/Transfer');
 const bcrypt = require('bcryptjs');
-const { enrichFlightDetails } = require('./flightEnrichmentHelper');
+const { enrichFlightDetails, formatAirportLocation } = require('./flightEnrichmentHelper');
 
 /**
  * Google Sheets Sync Service for Travelers and Drivers
@@ -70,6 +70,71 @@ class GoogleSheetsSyncService {
       } else {
         throw new Error(`Failed to fetch Google Sheet: ${error.message || 'Unknown error'}`);
       }
+    }
+  }
+
+  /**
+   * Parse a single CSV line handling quoted fields (handles commas inside quotes)
+   * @param {string} line - CSV line
+   * @returns {string[]} Array of field values
+   */
+  parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (c === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += c;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  /**
+   * Fetch sheet data as CSV to preserve column order (for duplicate headers).
+   * Transfer sync format has duplicate "Check In Date" and "Flight No" columns.
+   * @param {string} sheetId - Google Sheet ID
+   * @param {number} gid - Sheet tab ID (0 = first sheet)
+   * @returns {Promise<{ headers: string[], rows: string[][] }>}
+   */
+  async fetchSheetDataAsArrays(sheetId, gid = 0) {
+    try {
+      if (!sheetId || typeof sheetId !== 'string' || sheetId.trim().length < 20) {
+        throw new Error('Invalid Sheet ID format. Please check that you copied the correct Sheet ID from the Google Sheets URL.');
+      }
+      const cleanSheetId = sheetId.trim();
+      const url = `https://docs.google.com/spreadsheets/d/${cleanSheetId}/export?format=csv&gid=${gid}`;
+      console.log(`📊 Fetching Google Sheet as CSV: ${url}`);
+      const response = await axios.get(url, { timeout: 30000, responseType: 'text' });
+      const text = typeof response.data === 'string' ? response.data : String(response.data);
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) {
+        throw new Error('Sheet appears to be empty or has no data rows');
+      }
+      const headers = this.parseCSVLine(lines[0]);
+      const rows = lines.slice(1).map((line) => this.parseCSVLine(line));
+      console.log(`✅ Fetched ${rows.length} rows (${headers.length} columns) from CSV`);
+      return { headers, rows };
+    } catch (error) {
+      if (error.response?.status === 403 || error.response?.status === 404) {
+        throw new Error(
+          'Failed to fetch Google Sheet. Ensure the sheet is public (Share → Anyone with the link → Viewer). ' +
+          `Sheet ID: ${sheetId.substring(0, 20)}...`
+        );
+      }
+      throw error;
     }
   }
 
@@ -293,6 +358,161 @@ class GoogleSheetsSyncService {
         client,
         username: username || this.generateUsername(email, firstName, lastName),
         password: password || this.generatePassword()
+      }
+    };
+  }
+
+  /**
+   * Build column index map for transfer sync format (handles duplicate headers).
+   * Format: Company Name, Salutation, First Name, Last Name, Name As Per Passport,
+   * Contact No, Email, ..., Check In Date, Flight No, ETA, Check In Date, Check Out Date, Flight No, ETD, ...
+   * @param {string[]} headers - Header row from CSV
+   * @returns {Object} Map of field name -> column index
+   */
+  buildTransferSyncColumnMap(headers) {
+    const normalize = (h) =>
+      String(h || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '')
+        .replace(/[\-_()/:&]/g, '');
+    const map = {};
+    const seen = {};
+    for (let i = 0; i < headers.length; i++) {
+      const n = normalize(headers[i]);
+      if (!n) continue;
+      // Handle duplicates: first "Check In Date" -> arrivalCheckInDate, second -> returnCheckInDate
+      // First "Flight No" -> arrivalFlightNo, second -> returnFlightNo
+      if (n === 'checkindate') {
+        if (!seen.checkindate) {
+          map.arrivalCheckInDate = i;
+          seen.checkindate = 1;
+        } else {
+          map.returnCheckInDate = i;
+        }
+      } else if (n === 'flightno') {
+        if (!seen.flightno) {
+          map.arrivalFlightNo = i;
+          seen.flightno = 1;
+        } else {
+          map.returnFlightNo = i;
+        }
+      } else if (n === 'companyname') map.companyName = i;
+      else if (n === 'salutation') map.salutation = i;
+      else if (n === 'firstname') map.firstName = i;
+      else if (n === 'lastname') map.lastName = i;
+      else if (n === 'nameasperpassport') map.nameAsPerPassport = i;
+      else if (n === 'passportno' || n === 'passportnumber') map.passportNumber = i;
+      else if (n === 'contactno') map.contactNo = i;
+      else if (n === 'email') map.email = i;
+      else if (n === 'eta') map.eta = i;
+      else if (n === 'checkoutdate') map.checkOutDate = i;
+      else if (n === 'etd') map.etd = i;
+    }
+    return map;
+  }
+
+  /**
+   * Parse date+time from transfer sync format (e.g. "7/5/2026", "8:25 AM").
+   * Tries DD/MM/YYYY and MM/DD/YYYY.
+   * @param {string} dateStr - Date like "7/5/2026" or "15/05/2026"
+   * @param {string} timeStr - Time like "8:25 AM" or "9:55 PM"
+   * @returns {string|null} ISO string or null
+   */
+  parseTransferSyncDateTime(dateStr, timeStr) {
+    if (!dateStr || !String(dateStr).trim()) return null;
+    const s = String(dateStr).trim();
+    let d = new Date(s);
+    if (Number.isNaN(d.getTime())) {
+      const parts = s.split(/[/-]/);
+      if (parts.length >= 3) {
+        const [a, b, c] = parts.map((p) => parseInt(p, 10));
+        if (a > 12) d = new Date(c, b - 1, a);
+        else if (b > 12) d = new Date(c, a - 1, b);
+        else d = new Date(c, b - 1, a);
+      }
+    }
+    if (Number.isNaN(d.getTime())) return null;
+    if (timeStr && String(timeStr).trim()) {
+      const t = String(timeStr).trim();
+      const match = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+      if (match) {
+        let h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const ampm = (match[3] || '').toUpperCase();
+        if (ampm === 'PM' && h < 12) h += 12;
+        if (ampm === 'AM' && h === 12) h = 0;
+        d.setHours(h, m, 0, 0);
+      }
+    }
+    return d.toISOString();
+  }
+
+  /**
+   * Parse transfer sync sheet row (new format) into primary traveler data.
+   * One row per traveler; no Delegate 2 in this format.
+   *
+   * @param {string[]} row - Row as array of cell values
+   * @param {Object} colMap - Map of field name -> column index (from buildTransferSyncColumnMap)
+   * @returns {{ valid: boolean, error?: string, data?: Object }}
+   */
+  parseRowToTransferSyncFormat(row, colMap) {
+    const get = (key) => {
+      const idx = colMap[key];
+      if (idx == null || idx >= row.length) return null;
+      const v = row[idx];
+      return v !== undefined && v !== null && String(v).trim() !== '' ? String(v).trim() : null;
+    };
+
+    const companyName = get('companyName');
+    const firstName = get('firstName');
+    const lastName = get('lastName');
+    const nameAsPerPassport = get('nameAsPerPassport');
+    const passportNumber = get('passportNumber');
+    const contactNo = get('contactNo');
+    const email = get('email');
+    const arrivalCheckInDate = get('arrivalCheckInDate');
+    const arrivalFlightNo = get('arrivalFlightNo');
+    const eta = get('eta');
+    const checkOutDate = get('checkOutDate');
+    const returnFlightNo = get('returnFlightNo');
+    const etd = get('etd');
+
+    const name = [firstName, lastName].filter(Boolean).join(' ') || nameAsPerPassport || email?.split('@')[0] || '';
+
+    if (!email) {
+      return { valid: false, error: 'Missing required field: Email' };
+    }
+
+    // Skip #ERROR! and invalid phone
+    const phone = contactNo && !String(contactNo).includes('#ERROR') ? contactNo : '';
+
+    const arrivalTime = this.parseTransferSyncDateTime(arrivalCheckInDate, eta);
+    const departureTime = this.parseTransferSyncDateTime(checkOutDate, etd);
+
+    const primary = {
+      name: name || email,
+      email: email.toLowerCase(),
+      phone,
+      job_position: '',
+      company_name: companyName || '',
+      whatsapp_number: '',
+      consent_email: undefined,
+      consent_whatsapp: undefined,
+      flight_booked: undefined,
+      name_as_per_passport: nameAsPerPassport || undefined,
+      passport_number: passportNumber || undefined,
+      arrival_flight_no: arrivalFlightNo || 'XX000',
+      arrival_time: arrivalTime,
+      departure_flight_no: returnFlightNo || arrivalFlightNo || 'XX000',
+      departure_time: departureTime || arrivalTime
+    };
+
+    return {
+      valid: true,
+      data: {
+        primary,
+        delegate2: { present: false }
       }
     };
   }
@@ -948,16 +1168,18 @@ class GoogleSheetsSyncService {
 
   /**
    * Sync registration sheet rows into Transfer documents.
-   * One transfer per primary traveler row, with optional Delegate 2 stored as traveler_details.
-   * Creates Traveler users automatically for primary and delegate 2, and links them to the transfer.
+   * Uses new transfer sync format: Company Name, First Name, Last Name, Email, Contact No,
+   * Check In Date, Flight No, ETA (onward), Check Out Date, Flight No, ETD (return).
+   * One transfer per row; no Delegate 2 in this format.
    *
-   * @param {string} sheetId
-   * @param {string} sheetName
+   * @param {string} sheetId - Google Sheet ID
+   * @param {string} sheetName - Unused (kept for API compat); use gid for sheet selection
    * @param {import('mongoose').Types.ObjectId|string} customerId - Client user ID for all transfers
-   * @param {import('mongoose').Types.ObjectId|string} syncUserId - User performing the sync (for audit logs)
+   * @param {import('mongoose').Types.ObjectId|string} syncUserId - User performing the sync
+   * @param {number} gid - Sheet tab ID (0 = first sheet). For multi-sheet workbooks, get from URL #gid=
    * @returns {Promise<Object>} Sync results
    */
-  async syncTransfersFromRegistrationSheet(sheetId, sheetName, customerId, syncUserId) {
+  async syncTransfersFromRegistrationSheet(sheetId, sheetName, customerId, syncUserId, gid = 0) {
     const results = {
       total: 0,
       createdTransfers: 0,
@@ -967,8 +1189,10 @@ class GoogleSheetsSyncService {
     };
 
     try {
-      const rows = await this.fetchSheetData(sheetId, sheetName);
+      console.log(`[TransferSync] Starting sync: sheetId=${sheetId?.slice(0, 12)}..., gid=${gid}`);
+      const { headers, rows } = await this.fetchSheetDataAsArrays(sheetId, gid);
       if (!rows.length) {
+        console.log('[TransferSync] Sheet is empty');
         return {
           ...results,
           success: true,
@@ -976,40 +1200,27 @@ class GoogleSheetsSyncService {
         };
       }
 
-      const firstRow = rows[0];
-      const columnMap = {};
-
-      Object.keys(firstRow).forEach((headerName) => {
-        const normalized = this.normalizeColumnName(headerName);
-        if (normalized) {
-          columnMap[normalized] = headerName;
-        }
-      });
-
-      // Prefer "Email Address" over "Email ID" for primary email when both exist
-      if (
-        firstRow['Email Address'] !== undefined &&
-        firstRow['Email Address'] !== null &&
-        String(firstRow['Email Address']).trim() !== ''
-      ) {
-        columnMap['email'] = 'Email Address';
-      }
-
-      console.log('📋 Registration column mapping:', columnMap);
+      const colMap = this.buildTransferSyncColumnMap(headers);
+      console.log('[TransferSync] Column mapping:', JSON.stringify(colMap));
+      console.log(`[TransferSync] Processing ${rows.length} rows. Rows with errors will be skipped; rest will be created.`);
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         results.total += 1;
+        const rowNum = i + 1;
 
         try {
-          const parsed = this.parseRowToRegistration(row, columnMap);
+          const parsed = this.parseRowToTransferSyncFormat(row, colMap);
           if (!parsed.valid) {
             results.skipped += 1;
+            const emailIdx = colMap.email;
+            const emailVal = emailIdx != null && row[emailIdx] ? row[emailIdx] : 'N/A';
             results.errors.push({
-              row: i + 1,
-              email: row[columnMap.email] || row.Email || row['Email Address'] || 'N/A',
+              row: rowNum,
+              email: emailVal,
               error: parsed.error
             });
+            console.log(`[TransferSync] Row ${rowNum} SKIP (validation): ${parsed.error} – continuing with other rows`);
             continue;
           }
 
@@ -1037,7 +1248,9 @@ class GoogleSheetsSyncService {
             consent_email: primary.consent_email || undefined,
             consent_whatsapp: primary.consent_whatsapp || undefined,
             whatsapp_number: primary.whatsapp_number || undefined,
-            flight_booked: primary.flight_booked || undefined
+            flight_booked: primary.flight_booked || undefined,
+            name_as_per_passport: primary.name_as_per_passport || undefined,
+            passport_number: primary.passport_number || undefined
           };
 
           // Onward leg: use Arrival Date & Time (when flight lands at airport = pickup time)
@@ -1150,8 +1363,9 @@ class GoogleSheetsSyncService {
             transfer_status: 'pending'
           };
 
-          // Auto-fetch flight data from Aviationstack when real flight numbers exist
+          // Fetch flight data from FlightStats (uses sheet dates: Check In Date, Check Out Date)
           try {
+            console.log(`[TransferSync] Row ${rowNum} (${primary.email}): enriching flights – onward ${flight_details.flight_no} (${onward_arrival_time?.slice?.(0, 10) || 'N/A'}), return ${return_flight_details.flight_no} (${returnDepartureTime?.slice?.(0, 10) || 'N/A'})`);
             const [enrichedOnward, enrichedReturn, enrichedTraveler] = await Promise.all([
               enrichFlightDetails(flight_details, onward_arrival_time),
               enrichFlightDetails(return_flight_details, returnDepartureTime),
@@ -1165,8 +1379,16 @@ class GoogleSheetsSyncService {
               delegates[0].flight_details = enrichedTraveler;
               traveler_flight_details = enrichedTraveler;
             }
+
+            // Update pickup/drop from enriched airport data (replaces "Airport (TBD)")
+            if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
+              transfer_details.pickup_location = formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
+            }
+            if (return_flight_details.departure_airport && return_flight_details.departure_airport !== 'TBD') {
+              return_transfer_details.drop_location = formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
+            }
           } catch (e) {
-            console.warn('Flight enrichment during sync:', e.message);
+            console.warn(`[TransferSync] Row ${rowNum} flight enrichment failed:`, e.message, '– continuing with TBD');
           }
 
           // Generate APEX ID similar to transferController.generateApexId
@@ -1211,25 +1433,28 @@ class GoogleSheetsSyncService {
 
           await transfer.save();
           results.createdTransfers += 1;
-          console.log(`✅ Created transfer ${transfer._id} for ${primary.email}`);
+          console.log(`[TransferSync] Row ${rowNum} ✓ Created transfer ${transfer._id} for ${primary.email}`);
         } catch (error) {
           results.skipped += 1;
+          const emailIdx = colMap.email;
+          const emailVal = emailIdx != null && row[emailIdx] ? row[emailIdx] : 'N/A';
           results.errors.push({
-            row: i + 1,
-            email: row[columnMap.email] || row.Email || row['Email Address'] || 'N/A',
+            row: rowNum,
+            email: emailVal,
             error: error.message
           });
-          console.error(`❌ Error processing registration row ${i + 1}:`, error.message);
+          console.error(`[TransferSync] Row ${rowNum} ERROR – ${error.message}. Skipping this row; rest of transfers will still be created.`);
         }
       }
 
+      console.log(`[TransferSync] Complete: ${results.createdTransfers} created, ${results.createdTravelers} travelers, ${results.skipped} skipped (${results.errors.length} errors)`);
       return {
         ...results,
         success: true,
-        message: `Registration sync completed: ${results.createdTransfers} transfers created, ${results.createdTravelers} travelers created, ${results.skipped} skipped`
+        message: `Registration sync completed: ${results.createdTransfers} transfers created, ${results.createdTravelers} travelers created, ${results.skipped} skipped. ${results.errors.length ? `Rows with errors were skipped; other transfers were created.` : ''}`
       };
     } catch (error) {
-      console.error('Error syncing transfers from registration sheet:', error);
+      console.error('[TransferSync] Fatal error:', error.message, error.stack);
       return {
         ...results,
         success: false,

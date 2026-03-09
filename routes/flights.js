@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const Transfer = require('../models/Transfer');
-const aviationstackService = require('../services/aviationstackService');
+const flightStatsService = require('../services/flightStatsService');
+const { enrichFlightDetails } = require('../services/flightEnrichmentHelper');
 
 // Import controllers
 const {
@@ -23,7 +24,7 @@ const {
 
 /**
  * @route   POST /api/flights/verify
- * @desc    Manually verify flight for a transfer (enrich from Aviationstack)
+ * @desc    Manually verify flight for a transfer (enrich from FlightStats)
  * @access  Private (SUPER_ADMIN, ADMIN, OPERATIONS_MANAGER)
  */
 router.post('/verify', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER'), async (req, res) => {
@@ -36,9 +37,10 @@ router.post('/verify', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIO
       return res.status(400).json({ success: false, message: 'flight_number or transfer_id with flight required' });
     }
 
-    const enriched = await aviationstackService.fetchFlightWithCache(fn, fd || new Date());
+    const placeholder = { flight_no: fn, airline: 'TBD', departure_airport: 'TBD', arrival_airport: 'TBD', departure_time: fd, arrival_time: fd };
+    const enriched = await enrichFlightDetails(placeholder, fd || new Date());
     if (!enriched) {
-      return res.status(404).json({ success: false, message: 'Flight data not found' });
+      return res.status(404).json({ success: false, message: 'Flight data not found (FlightStats may not have data for this date or airline)' });
     }
 
     if (transfer_id) {
@@ -63,8 +65,46 @@ router.post('/verify', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIO
 
     res.json({ success: true, data: enriched });
   } catch (err) {
-    console.error('Flight verify error:', err);
+    console.error('[FlightVerify] Error:', err);
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/**
+ * @route   GET /api/flights/global-search
+ * @desc    Global flight search via FlightStats (flight number + date)
+ * @access  Private
+ */
+router.get('/global-search', authenticate, async (req, res) => {
+  try {
+    const { flight, date } = req.query;
+    console.log('[GlobalFlightSearch] Request:', { flight, date });
+
+    if (!flight || !flight.trim()) {
+      return res.status(400).json({ success: false, message: 'flight number is required' });
+    }
+
+    const searchDate = date || new Date().toISOString().slice(0, 10);
+    console.log('[GlobalFlightSearch] Calling getFlightData:', { flight: flight.trim(), searchDate });
+
+    const data = await flightStatsService.getFlightData(flight.trim(), searchDate);
+
+    if (!data) {
+      console.log('[GlobalFlightSearch] No data returned for', flight.trim(), searchDate);
+      return res.status(404).json({
+        success: false,
+        message: 'Flight not found. FlightStats may not have data for this date (OTP: ±3 days from today) or for this airline (e.g. IndiGo/6E has limited coverage). Try a date closer to today or another airline.'
+      });
+    }
+
+    console.log('[GlobalFlightSearch] Success:', data.flight, data.departureAirport, '->', data.arrivalAirport);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[GlobalFlightSearch] Error:', err.message, err.stack);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Failed to fetch flight data'
+    });
   }
 });
 

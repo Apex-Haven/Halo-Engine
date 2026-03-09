@@ -324,14 +324,18 @@ const generateProgressSteps = (transfer) => {
   const hasDriver = !!transfer.assigned_driver_details;
   const onwardCompleted = onwardStatus === 'completed';
   const hasReturn = !!(transfer.return_transfer_details || transfer.return_flight_details);
-  const returnDriverAssigned = hasReturn && returnStatus && returnStatus !== 'pending';
+  // Driver Assigned: status is 'assigned' or later (or has assigned_driver_details)
+  const driverAssigned = hasDriver || ['assigned', 'enroute', 'waiting', 'in_progress', 'completed'].includes(onwardStatus);
+  // Transfer Started: driver has begun (enroute, waiting, in_progress, or completed) - not just assigned
+  const transferStarted = ['enroute', 'waiting', 'in_progress', 'completed'].includes(onwardStatus);
+  const returnDriverAssigned = hasReturn && (!!transfer.return_assigned_driver_details || ['assigned', 'enroute', 'waiting', 'in_progress', 'completed'].includes(returnStatus));
   const returnCompleted = hasReturn && returnStatus === 'completed';
   const allCompleted = onwardCompleted && (!hasReturn || returnCompleted);
 
   const steps = [
     { id: 1, title: 'Transfer Requested', description: 'Your transfer request has been received', status: 'completed', timestamp: new Date(transfer.createdAt || new Date()) },
-    { id: 2, title: 'Driver Assigned (Arrival)', description: hasDriver ? `Driver: ${transfer.assigned_driver_details?.name || 'N/A'}` : 'Vendor will assign a driver', status: hasDriver ? 'completed' : 'pending', timestamp: hasDriver ? new Date() : null },
-    { id: 3, title: 'Transfer Started', description: 'Transfer has begun', status: hasDriver ? 'completed' : 'pending', timestamp: hasDriver ? new Date() : null },
+    { id: 2, title: 'Driver Assigned (Arrival)', description: driverAssigned ? `Driver: ${transfer.assigned_driver_details?.name || 'N/A'}` : 'Vendor will assign a driver', status: driverAssigned ? 'completed' : 'pending', timestamp: driverAssigned ? new Date() : null },
+    { id: 3, title: 'Transfer Started', description: 'Transfer has begun', status: transferStarted ? 'completed' : 'pending', timestamp: transferStarted ? new Date() : null },
     { id: 4, title: 'Arrival Transfer Completed', description: 'You have reached your destination', status: onwardCompleted ? 'completed' : 'pending', timestamp: onwardCompleted ? new Date() : null }
   ];
 
