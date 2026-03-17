@@ -1,6 +1,5 @@
 const cron = require('node-cron');
 const Transfer = require('../models/Transfer');
-const { getFlightByNumber, batchUpdateFlights } = require('../config/flightApi');
 const notificationService = require('./notificationService');
 
 class CronService {
@@ -17,9 +16,6 @@ class CronService {
     }
 
     console.log('🚀 Starting HALO cron jobs...');
-    
-    // Flight status sync - every 10 minutes
-    this.startJob('flight-sync', '*/10 * * * *', this.syncFlightStatuses.bind(this));
     
     // Notification processing - every 5 minutes
     this.startJob('notifications', '*/5 * * * *', this.processNotifications.bind(this));
@@ -68,77 +64,6 @@ class CronService {
       console.log(`✅ Started cron job: ${name} (${schedule})`);
     } catch (error) {
       console.error(`❌ Failed to start cron job ${name}:`, error);
-    }
-  }
-
-  // Sync flight statuses from external API
-  async syncFlightStatuses() {
-    try {
-      console.log('🔄 Syncing flight statuses...');
-      
-      // Get all active transfers (flights that haven't landed or been cancelled)
-      const activeTransfers = await Transfer.find({
-        'flight_details.status': { $in: ['on_time', 'delayed', 'boarding', 'departed'] },
-        'flight_details.arrival_time': { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-      }).limit(50); // Limit to avoid API rate limits
-      
-      if (activeTransfers.length === 0) {
-        console.log('📭 No active transfers to sync');
-        return;
-      }
-      
-      const flightNumbers = [...new Set(activeTransfers.map(t => t.flight_details.flight_no))];
-      console.log(`✈️ Syncing ${flightNumbers.length} unique flights`);
-      
-      // Batch update flights
-      const results = await batchUpdateFlights(flightNumbers);
-      
-      let updatedCount = 0;
-      let errorCount = 0;
-      
-      for (const transfer of activeTransfers) {
-        try {
-          const flightResult = results.find(r => 
-            r.success && r.data && r.data.flight_no === transfer.flight_details.flight_no
-          );
-          
-          if (flightResult && flightResult.data) {
-            const oldStatus = transfer.flight_details.status;
-            const newStatus = flightResult.data.status;
-            
-            if (oldStatus !== newStatus) {
-              // Update flight status
-              await transfer.updateFlightStatus(newStatus, flightResult.data.delay_minutes || 0);
-              
-              // Update additional details
-              if (flightResult.data.gate) transfer.flight_details.gate = flightResult.data.gate;
-              if (flightResult.data.terminal) transfer.flight_details.terminal = flightResult.data.terminal;
-              
-              await transfer.save();
-              
-              console.log(`✅ Updated ${transfer.flight_details.flight_no}: ${oldStatus} → ${newStatus}`);
-              updatedCount++;
-              
-              // Send notification if status changed significantly
-              if (['landed', 'cancelled', 'delayed'].includes(newStatus)) {
-                await notificationService.sendFlightStatusNotification(
-                  transfer, 
-                  newStatus, 
-                  flightResult.data.delay_minutes || 0
-                );
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`❌ Error updating transfer ${transfer._id}:`, error);
-          errorCount++;
-        }
-      }
-      
-      console.log(`✅ Flight sync completed: ${updatedCount} updated, ${errorCount} errors`);
-      
-    } catch (error) {
-      console.error('❌ Error in flight status sync:', error);
     }
   }
 
@@ -348,9 +273,6 @@ class CronService {
   async triggerJob(jobName) {
     try {
       switch (jobName) {
-        case 'flight-sync':
-          await this.syncFlightStatuses();
-          break;
         case 'notifications':
           await this.processNotifications();
           break;

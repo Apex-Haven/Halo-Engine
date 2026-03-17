@@ -1,33 +1,21 @@
 const Transfer = require('../models/Transfer');
-const { getFlightByNumber, batchUpdateFlights } = require('../config/flightApi');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const { sendTemplatedEmail } = require('../config/nodemailer');
 const moment = require('moment');
 
-// Get flight status by flight number
+// Get flight status by flight number (deprecated - use global search instead)
 const getFlightStatus = async (req, res) => {
   try {
-    const { flight_no } = req.params;
-    
-    const flightData = await getFlightByNumber(flight_no);
-    
-    if (!flightData) {
-      return res.status(404).json({
-        success: false,
-        message: 'Flight not found',
-        flight_no
-      });
-    }
-
-    res.json({
-      success: true,
-      data: flightData
+    return res.status(410).json({
+      success: false,
+      message: 'This endpoint is deprecated. Please use the global flight search API instead.',
+      suggestion: 'GET /api/flights/global-search?flight=FLIGHT_NUMBER&date=YYYY-MM-DD'
     });
   } catch (error) {
-    console.error('Error fetching flight status:', error);
+    console.error('Error in deprecated flight status endpoint:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch flight status',
+      message: 'Endpoint deprecated',
       error: error.message
     });
   }
@@ -75,160 +63,37 @@ const updateTransferFlightStatus = async (req, res) => {
   }
 };
 
-// Sync flight status from external API
+// Sync flight status from external API (deprecated)
 const syncFlightStatus = async (req, res) => {
   try {
-    const { id } = req.params;
-    
-    const transfer = await Transfer.findById(id);
-    if (!transfer) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transfer not found',
-        apexId: id
-      });
-    }
-
-    // Get latest flight data from API
-    const flightData = await getFlightByNumber(transfer.flight_details.flight_no);
-    
-    if (!flightData) {
-      return res.status(404).json({
-        success: false,
-        message: 'Flight data not available from API',
-        flight_no: transfer.flight_details.flight_no
-      });
-    }
-
-    // Update transfer with latest flight data
-    const oldStatus = transfer.flight_details.status;
-    const oldArrivalTime = transfer.flight_details.arrival_time;
-    
-    transfer.flight_details.status = flightData.status;
-    transfer.flight_details.delay_minutes = flightData.delay_minutes || 0;
-    transfer.flight_details.gate = flightData.gate || transfer.flight_details.gate;
-    transfer.flight_details.terminal = flightData.terminal || transfer.flight_details.terminal;
-    
-    // Update arrival time if delayed
-    if (flightData.delay_minutes > 0) {
-      const originalArrival = new Date(oldArrivalTime);
-      transfer.flight_details.arrival_time = new Date(originalArrival.getTime() + (flightData.delay_minutes * 60000));
-    }
-    
-    transfer.addAuditLog('flight_updated', 'api_sync', `Flight status synced: ${oldStatus} → ${flightData.status}`);
-    await transfer.save();
-
-    // Send notifications if status changed
-    if (oldStatus !== flightData.status) {
-      await handleFlightStatusNotifications(transfer, flightData.status, flightData.delay_minutes);
-    }
-
-    res.json({
-      success: true,
-      message: 'Flight status synced successfully',
-      data: {
-        oldStatus,
-        newStatus: flightData.status,
-        delayMinutes: flightData.delay_minutes,
-        transfer
-      }
+    return res.status(410).json({
+      success: false,
+      message: 'Flight sync is deprecated. Flight data is now fetched on-demand using the global search API.',
+      suggestion: 'Use GET /api/flights/global-search for real-time flight information'
     });
   } catch (error) {
-    console.error('Error syncing flight status:', error);
+    console.error('Error in deprecated flight sync endpoint:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to sync flight status',
+      message: 'Endpoint deprecated',
       error: error.message
     });
   }
 };
 
-// Batch sync multiple flights
+// Batch sync multiple flights (deprecated)
 const batchSyncFlights = async (req, res) => {
   try {
-    const { flight_numbers } = req.body;
-    
-    if (!Array.isArray(flight_numbers) || flight_numbers.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'flight_numbers must be a non-empty array'
-      });
-    }
-
-    // Get all transfers for these flights
-    const transfers = await Transfer.find({
-      'flight_details.flight_no': { $in: flight_numbers.map(fn => fn.toUpperCase()) }
-    });
-
-    if (transfers.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'No transfers found for the provided flight numbers'
-      });
-    }
-
-    // Batch update flights
-    const results = await batchUpdateFlights(flight_numbers);
-    
-    // Update transfers with new flight data
-    const updateResults = [];
-    for (const transfer of transfers) {
-      try {
-        const flightData = results.find(r => 
-          r.success && r.data && r.data.flight_no === transfer.flight_details.flight_no
-        );
-        
-        if (flightData && flightData.data) {
-          const oldStatus = transfer.flight_details.status;
-          
-          transfer.flight_details.status = flightData.data.status;
-          transfer.flight_details.delay_minutes = flightData.data.delay_minutes || 0;
-          transfer.flight_details.gate = flightData.data.gate || transfer.flight_details.gate;
-          transfer.flight_details.terminal = flightData.data.terminal || transfer.flight_details.terminal;
-          
-          transfer.addAuditLog('flight_updated', 'batch_sync', `Batch sync: ${oldStatus} → ${flightData.data.status}`);
-          await transfer.save();
-          
-          updateResults.push({
-            apexId: transfer._id,
-            flightNo: transfer.flight_details.flight_no,
-            success: true,
-            oldStatus,
-            newStatus: flightData.data.status
-          });
-        } else {
-          updateResults.push({
-            apexId: transfer._id,
-            flightNo: transfer.flight_details.flight_no,
-            success: false,
-            error: 'Flight data not available'
-          });
-        }
-      } catch (error) {
-        updateResults.push({
-          apexId: transfer._id,
-          flightNo: transfer.flight_details.flight_no,
-          success: false,
-          error: error.message
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      message: 'Batch flight sync completed',
-      data: {
-        totalTransfers: transfers.length,
-        updated: updateResults.filter(r => r.success).length,
-        failed: updateResults.filter(r => !r.success).length,
-        results: updateResults
-      }
+    return res.status(410).json({
+      success: false,
+      message: 'Batch flight sync is deprecated. Flight data is now fetched on-demand using the global search API.',
+      suggestion: 'Use GET /api/flights/global-search for real-time flight information'
     });
   } catch (error) {
-    console.error('Error in batch flight sync:', error);
+    console.error('Error in deprecated batch flight sync endpoint:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to batch sync flights',
+      message: 'Endpoint deprecated',
       error: error.message
     });
   }
