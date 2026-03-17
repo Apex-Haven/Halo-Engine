@@ -19,16 +19,47 @@ const authenticate = async (req, res, next) => {
     const user = await User.findById(decoded.userId).select('-password');
     
     if (!user || !user.isActive) {
+      // Log failed authentication attempt
+      const clientInfo = {
+        ip: req.ip || req.connection.remoteAddress || 'unknown',
+        userAgent: req.get('User-Agent') || 'unknown',
+        timestamp: new Date().toISOString(),
+        userId: decoded.userId,
+        reason: !user ? 'user_not_found' : 'user_inactive'
+      };
+      console.log('🚨 Authentication failed:', JSON.stringify(clientInfo));
+      
       return res.status(401).json({
         success: false,
         message: 'Invalid token or user not found.'
       });
     }
 
+    // Log successful authentication
+    const authLog = {
+      ip: req.ip || req.connection.remoteAddress || 'unknown',
+      userAgent: req.get('User-Agent') || 'unknown',
+      timestamp: new Date().toISOString(),
+      userId: user._id,
+      email: user.email,
+      role: user.role,
+      name: user.name || 'N/A'
+    };
+    console.log('✅ Authentication success:', JSON.stringify(authLog));
+
     req.user = user;
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
+      const clientInfo = {
+        ip: req.ip || req.connection.remoteAddress || 'unknown',
+        userAgent: req.get('User-Agent') || 'unknown',
+        timestamp: new Date().toISOString(),
+        error: 'invalid_token',
+        token: token.substring(0, 20) + '...'
+      };
+      console.log('🚨 JWT Error:', JSON.stringify(clientInfo));
+      
       return res.status(401).json({
         success: false,
         message: 'Invalid token.'
@@ -36,11 +67,29 @@ const authenticate = async (req, res, next) => {
     }
     
     if (error.name === 'TokenExpiredError') {
+      const clientInfo = {
+        ip: req.ip || req.connection.remoteAddress || 'unknown',
+        userAgent: req.get('User-Agent') || 'unknown',
+        timestamp: new Date().toISOString(),
+        error: 'token_expired',
+        expiredAt: error.expiredAt
+      };
+      console.log('⏰ Token Expired:', JSON.stringify(clientInfo));
+      
       return res.status(401).json({
         success: false,
         message: 'Token expired.'
       });
     }
+
+    const errorInfo = {
+      ip: req.ip || req.connection.remoteAddress || 'unknown',
+      userAgent: req.get('User-Agent') || 'unknown',
+      timestamp: new Date().toISOString(),
+      error: error.message,
+      stack: error.stack
+    };
+    console.log('💥 Authentication Error:', JSON.stringify(errorInfo));
 
     res.status(500).json({
       success: false,
