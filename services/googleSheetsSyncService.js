@@ -1275,7 +1275,7 @@ class GoogleSheetsSyncService {
           const estimated_pickup_time = onward_arrival_time;
           const transfer_details = {
             pickup_location: 'Airport (TBD)',
-            drop_location: 'Hotel / Event (TBD)',
+            drop_location: 'Grand Hyatt',
             event_place: 'Event (TBD)',
             estimated_pickup_time,
             special_notes: ''
@@ -1356,7 +1356,7 @@ class GoogleSheetsSyncService {
           };
           const return_transfer_details = {
             pickup_location: 'Hotel / Event (TBD)',
-            drop_location: 'Airport (TBD)',
+            drop_location: 'Grand Hyatt',
             event_place: 'Event (TBD)',
             estimated_pickup_time: returnDepartureTime,
             special_notes: '',
