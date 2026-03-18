@@ -4,6 +4,9 @@ const router = express.Router();
 // Import controllers
 const {
   getTransferForTracking,
+  getCompaniesForTracking,
+  getTravelersForCompany,
+  searchTransferByCompanyAndTraveler,
   updateDriverLocation,
   getTrackingHistory
 } = require('../controllers/trackingController');
@@ -13,6 +16,27 @@ const { validateApexId, validateTrackingId } = require('../middleware/validation
 
 // Import authentication middleware
 const { optionalAuth } = require('../middleware/auth');
+
+/**
+ * @route   GET /api/tracking/companies
+ * @desc    Get unique company names for dropdown
+ * @access  Public
+ */
+router.get('/companies', getCompaniesForTracking);
+
+/**
+ * @route   GET /api/tracking/travelers
+ * @desc    Get traveler names for a company (query: company=)
+ * @access  Public
+ */
+router.get('/travelers', getTravelersForCompany);
+
+/**
+ * @route   GET /api/tracking/search
+ * @desc    Search transfer by company name and traveler name
+ * @access  Public
+ */
+router.get('/search', searchTransferByCompanyAndTraveler);
 
 /**
  * @route   GET /api/tracking/:id

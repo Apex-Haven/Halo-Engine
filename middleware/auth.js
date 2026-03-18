@@ -4,8 +4,8 @@ const { getJWTSecret } = require('../config/env');
 
 // Authentication middleware
 const authenticate = async (req, res, next) => {
+  const token = req.header('Authorization')?.replace('Bearer ', '');
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
     
     if (!token) {
       return res.status(401).json({
@@ -56,7 +56,7 @@ const authenticate = async (req, res, next) => {
         userAgent: req.get('User-Agent') || 'unknown',
         timestamp: new Date().toISOString(),
         error: 'invalid_token',
-        token: token.substring(0, 20) + '...'
+        token: token ? token.substring(0, 20) + '...' : '(none)'
       };
       console.log('🚨 JWT Error:', JSON.stringify(clientInfo));
       

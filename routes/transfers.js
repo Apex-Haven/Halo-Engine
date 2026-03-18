@@ -7,6 +7,7 @@ const {
   getTransfer,
   getTransfers,
   updateTransfer,
+  updateFlightDetails,
   assignVendor,
   assignDriver,
   assignReturnDriver,
@@ -117,6 +118,13 @@ router.put('/:id/driver/status', authenticate, validateApexId, authorize('SUPER_
  * @access  Private (Vendor, Vendor Manager, Admin)
  */
 router.put('/:id/driver/confirm', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'VENDOR'), authorizeResource('transfer'), validateDriverConfirmAction, confirmTravelerPickup);
+
+/**
+ * @route   PUT /api/transfers/:id/flight-details
+ * @desc    Update flight details only (partial update, no full transfer validation)
+ * @access  Private (Admin, Operations Manager, Client for own transfer)
+ */
+router.put('/:id/flight-details', authenticate, validateApexId, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'CLIENT'), authorizeResource('transfer'), updateFlightDetails);
 
 /**
  * @route   PUT /api/transfers/:id/client-details

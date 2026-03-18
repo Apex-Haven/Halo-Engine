@@ -26,11 +26,11 @@ const commonSchemas = {
     }),
 
   flightNumber: Joi.string()
-    .pattern(/^[A-Z]{2,3}\d{1,4}$/)
+    .pattern(/^[A-Z0-9]{2,3}\d{1,5}$/)
     .uppercase()
     .required()
     .messages({
-      'string.pattern.base': 'Flight number must be in format like AI202, EK501, etc.'
+      'string.pattern.base': 'Flight number must be in format like AI202, EK501, 6E5192, etc.'
     }),
 
   airportCode: Joi.string()

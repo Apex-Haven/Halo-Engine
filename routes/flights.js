@@ -93,7 +93,7 @@ router.get('/global-search', authenticate, async (req, res) => {
       console.log('[GlobalFlightSearch] No data returned for', flight.trim(), searchDate);
       return res.status(404).json({
         success: false,
-        message: 'Flight not found. FlightStats may not have data for this date (OTP: ±3 days from today) or for this airline (e.g. IndiGo/6E has limited coverage). Try a date closer to today or another airline.'
+        message: 'Flight not found for this date. Try a date closer to today.'
       });
     }
 

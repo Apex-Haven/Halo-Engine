@@ -387,8 +387,142 @@ const generateTrackingHistory = (transfer) => {
   return history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 };
 
+// Get unique company names for dropdown (public)
+const getCompaniesForTracking = async (req, res) => {
+  try {
+    const [cust, trav] = await Promise.all([
+      Transfer.distinct('customer_details.company_name', { 'customer_details.company_name': { $exists: true, $ne: '', $nin: [null] } }),
+      Transfer.distinct('traveler_details.company_name', { 'traveler_details.company_name': { $exists: true, $ne: '', $nin: [null] } })
+    ]);
+    const combined = [...new Set([...cust.filter(Boolean), ...trav.filter(Boolean)])].sort((a, b) => (a || '').localeCompare(b || ''));
+    res.json({ success: true, data: combined });
+  } catch (error) {
+    console.error('Error fetching companies:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch companies' });
+  }
+};
+
+// Get travelers for a given company (public)
+const getTravelersForCompany = async (req, res) => {
+  try {
+    const { company } = req.query;
+    if (!company?.trim()) {
+      return res.status(400).json({ success: false, message: 'Company name is required.' });
+    }
+    const companyRegex = new RegExp(company.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const transfers = await Transfer.find({
+      $or: [
+        { 'customer_details.company_name': companyRegex },
+        { 'traveler_details.company_name': companyRegex }
+      ]
+    }).select('customer_details.name traveler_details.name').lean();
+
+    const names = new Set();
+    transfers.forEach(t => {
+      const n1 = t.traveler_details?.name?.trim?.();
+      const n2 = t.customer_details?.name?.trim?.();
+      if (n1) names.add(n1);
+      if (n2) names.add(n2);
+    });
+    const list = [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
+    res.json({ success: true, data: list });
+  } catch (error) {
+    console.error('Error fetching travelers:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch travelers' });
+  }
+};
+
+// Search transfer by company name and traveler name
+const searchTransferByCompanyAndTraveler = async (req, res) => {
+  try {
+    const { company, traveler } = req.query;
+    if (!company?.trim() || !traveler?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both company name and traveler name are required.'
+      });
+    }
+
+    const companyRegex = new RegExp(company.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const travelerRegex = new RegExp(traveler.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+    const transfers = await Transfer.find({
+      $and: [
+        {
+          $or: [
+            { 'customer_details.company_name': companyRegex },
+            { 'traveler_details.company_name': companyRegex }
+          ]
+        },
+        {
+          $or: [
+            { 'traveler_details.name': travelerRegex },
+            { 'customer_details.name': travelerRegex }
+          ]
+        }
+      ]
+    }).limit(20).sort({ createdAt: -1, create_time: -1 });
+
+    if (transfers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No transfer found for this company and traveler.'
+      });
+    }
+
+    const transfer = transfers[0];
+    const transferObj = transfer.toObject ? transfer.toObject() : transfer;
+
+    let actualLocation = null;
+    if (transferObj.location_tracking?.last_location) {
+      actualLocation = {
+        latitude: transferObj.location_tracking.last_location.latitude,
+        longitude: transferObj.location_tracking.last_location.longitude,
+        address: transferObj.location_tracking.last_location.address || '',
+        timestamp: transferObj.location_tracking.last_location.timestamp
+      };
+    } else if (transferObj.assigned_driver_details?.currentLocation) {
+      actualLocation = {
+        latitude: transferObj.assigned_driver_details.currentLocation.latitude,
+        longitude: transferObj.assigned_driver_details.currentLocation.longitude,
+        address: transferObj.assigned_driver_details.currentLocation.address || '',
+        timestamp: transferObj.assigned_driver_details.currentLocation.lastUpdated
+      };
+    } else {
+      actualLocation = generateMockDriverLocation(transferObj);
+    }
+
+    const trackingData = {
+      ...transferObj,
+      tracking: {
+        currentStatus: transferObj.transfer_details?.transfer_status || transferObj.transfer_details?.status || 'pending',
+        lastUpdated: actualLocation?.timestamp || new Date(),
+        estimatedArrival: calculateEstimatedArrival(transferObj),
+        driverLocation: actualLocation,
+        routeHistory: transferObj.location_tracking?.route_history || [],
+        progressSteps: generateProgressSteps(transferObj)
+      }
+    };
+
+    res.json({
+      success: true,
+      data: trackingData,
+      matchesCount: transfers.length
+    });
+  } catch (error) {
+    console.error('Error searching transfer by company/traveler:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to search transfer'
+    });
+  }
+};
+
 module.exports = {
   getTransferForTracking,
+  getCompaniesForTracking,
+  getTravelersForCompany,
+  searchTransferByCompanyAndTraveler,
   updateDriverLocation,
   getTrackingHistory
 };

@@ -19,6 +19,24 @@ const INTENTS = [
     extractId: (match) => match[1].toUpperCase(),
   },
   {
+    name: 'tracking_by_company_traveler',
+    patterns: [
+      /(?:status|track|find|check)\s+(?:for\s+)?([^,]+),\s*([A-Za-z\s]{2,50})/i,
+      /(?:status|track|find|check)\s+(?:for\s+)?(.+?)\s+-\s+([A-Za-z\s]{2,50})/i,
+      /(?:company|at)\s+(.+?)\s+(?:traveler|person)\s+([A-Za-z\s]{2,50})/i,
+      /^(.+?),\s*([A-Za-z\s]{2,50})$/,
+    ],
+    extractId: (match) => ({ company: match[1].trim(), traveler: match[2].trim() }),
+  },
+  {
+    name: 'tracking_by_company',
+    patterns: [
+      /(?:status|track|find|check)\s+(?:for\s+)?company\s+([A-Za-z0-9\s&.,'-]{2,80})$/i,
+      /(?:transfers?|transfer\s+status)\s+(?:for\s+)?company\s+([A-Za-z0-9\s&.,'-]{2,80})$/i,
+    ],
+    extractId: (match) => match[1].trim(),
+  },
+  {
     name: 'tracking_by_name',
     patterns: [
       /status\s+(?:of\s+)?(?:transfer\s+)?(?:for\s+)?([A-Za-z\s]{2,50})/i,
@@ -92,49 +110,121 @@ async function findTransferByName(name) {
   return transfers[0] || null;
 }
 
-function formatStatus(status) {
-  if (!status) return 'Pending';
-  return String(status).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+async function findTransferByCompanyAndTraveler(company, traveler) {
+  const companyRegex = new RegExp(company.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const travelerRegex = new RegExp(traveler.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const transfers = await Transfer.find({
+    $and: [
+      {
+        $or: [
+          { 'customer_details.company_name': companyRegex },
+          { 'traveler_details.company_name': companyRegex },
+        ],
+      },
+      {
+        $or: [
+          { 'traveler_details.name': travelerRegex },
+          { 'customer_details.name': travelerRegex },
+        ],
+      },
+    ],
+  })
+    .sort({ createdAt: -1, create_time: -1 })
+    .limit(1)
+    .lean();
+  return transfers[0] || null;
+}
+
+async function findTransferByCompany(company) {
+  const companyRegex = new RegExp(company.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  const transfers = await Transfer.find({
+    $or: [
+      { 'customer_details.company_name': companyRegex },
+      { 'traveler_details.company_name': companyRegex },
+    ],
+  })
+    .sort({ createdAt: -1, create_time: -1 })
+    .limit(10)
+    .lean();
+  return transfers;
+}
+
+function getStatusDisplay(transfer) {
+  const td = transfer.transfer_details || {};
+  const onwardStatus = (td.transfer_status || td.status || 'pending').toLowerCase().replace(/\s/g, '_');
+  const returnStatus = (transfer.return_transfer_details?.transfer_status || 'pending').toLowerCase().replace(/\s/g, '_');
+  const hasVendor = !!transfer.vendor_details?.vendor_name || !!transfer.vendor_details?.vendor_id;
+  const hasOnwardDriver = !!transfer.assigned_driver_details?.name || !!transfer.assigned_driver_details?.driver_name;
+  const hasReturnTransfer = !!(transfer.return_transfer_details || transfer.return_flight_details);
+  const onwardCompleted = onwardStatus === 'completed';
+  const returnCompleted = returnStatus === 'completed';
+  const returnInProgress = ['in_progress', 'enroute', 'waiting'].includes(returnStatus);
+  const hasReturnDriver = !!transfer.return_assigned_driver_details?.name || !!transfer.return_assigned_driver_details?.driver_name;
+
+  if (onwardStatus === 'cancelled' || returnStatus === 'cancelled') return { label: 'Cancelled', description: 'This transfer was cancelled.' };
+  if (hasReturnTransfer && onwardCompleted && returnCompleted) return { label: 'Completed', description: 'Your round trip is complete. Thank you for traveling with us!' };
+  if (hasReturnTransfer && onwardCompleted && returnInProgress) return { label: 'Return in progress', description: 'Your arrival is done. The driver is on the way for your return leg.' };
+  if (hasReturnTransfer && onwardCompleted && !returnCompleted) return { label: 'Onward completed', description: 'Arrival done. We\'re arranging your return transfer.' };
+  if (onwardCompleted) return { label: 'Completed', description: 'Transfer completed successfully.' };
+  if (['in_progress', 'enroute', 'waiting'].includes(onwardStatus)) return { label: 'In progress', description: 'Your driver is on the way or waiting at the pickup point.' };
+  if (hasReturnTransfer && onwardCompleted && !hasReturnDriver) return { label: 'Return driver pending', description: 'Your return leg is confirmed. A driver will be assigned shortly.' };
+  if (!hasVendor) return { label: 'Vendor assignment pending', description: 'We\'re assigning a vendor for your transfer. It will be updated in the portal soon.' };
+  if (!hasOnwardDriver) return { label: 'Driver assignment pending', description: 'Your vendor is confirmed. A driver will be assigned shortly.' };
+  if (onwardStatus === 'assigned') return { label: 'Assigned', description: 'Your driver is assigned and ready for pickup.' };
+  return { label: onwardStatus.replace(/_/g, ' '), description: 'Your transfer is being set up.' };
 }
 
 function formatDateTime(date) {
-  if (!date) return '—';
+  if (!date) return null;
   const d = new Date(date);
-  return d.toLocaleString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+  if (isNaN(d.getTime())) return null;
+  const day = d.getDate();
+  const month = d.toLocaleDateString('en-GB', { month: 'long' });
+  const year = d.getFullYear();
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${day}${day === 1 || day === 21 || day === 31 ? 'st' : day === 2 || day === 22 ? 'nd' : day === 3 || day === 23 ? 'rd' : 'th'} ${month} ${year}, ${time}`;
+}
+
+function cleanValue(val, fallback = '—') {
+  if (!val || val === 'TBD' || val === 'XX000') return null;
+  const s = String(val).trim();
+  if (s.endsWith('(TBD)')) return s.replace(/\s*\(TBD\)\s*$/, '').trim() || null;
+  return s || null;
 }
 
 function buildTransferResponse(transfer) {
   const td = transfer.transfer_details || {};
   const fd = transfer.flight_details || {};
   const driver = transfer.assigned_driver_details;
-  const status = td.transfer_status || td.status || 'pending';
+  const { label: statusLabel, description: statusDesc } = getStatusDisplay(transfer);
 
-  let text = `**Transfer ${transfer._id}**\n\n`;
-  text += `**Status:** ${formatStatus(status)}\n\n`;
-  text += `**Pickup:** ${td.pickup_location || '—'}\n`;
-  text += `**Drop-off:** ${td.drop_location || '—'}\n`;
+  const pickupLoc = cleanValue(td.pickup_location) || 'Airport';
+  const dropLoc = cleanValue(td.drop_location) || 'Grand Hyatt';
+  const hasRealFlight = fd.flight_no && fd.flight_no !== 'XX000' && fd.flight_no !== 'TBD';
+  const airlineClean = fd.airline ? cleanValue(fd.airline) : null;
+  const flightDisplay = hasRealFlight ? `${fd.flight_no}${airlineClean ? ` (${airlineClean})` : ''}` : null;
+
+  let text = `Here's your transfer status.\n\n`;
+  text += `**${statusLabel}**\n`;
+  text += `${statusDesc}\n\n`;
+  text += `**Route:** ${pickupLoc} → ${dropLoc}\n`;
   if (td.estimated_pickup_time) {
-    text += `**Pickup time:** ${formatDateTime(td.estimated_pickup_time)}\n`;
+    const pickupStr = formatDateTime(td.estimated_pickup_time);
+    if (pickupStr) text += `**Pickup time:** ${pickupStr}\n`;
   }
-  if (fd.flight_no && fd.flight_no !== 'XX000' && fd.flight_no !== 'TBD') {
-    text += `**Flight:** ${fd.flight_no} (${fd.airline || '—'})\n`;
+  if (flightDisplay) {
+    text += `**Flight:** ${flightDisplay}\n`;
+  } else if (fd.flight_no && fd.flight_no !== 'XX000' && fd.flight_no !== 'TBD') {
+    text += `**Flight:** ${fd.flight_no} (details to be confirmed)\n`;
   }
   if (driver) {
-    const driverName = driver.name || driver.driver_name || 'N/A';
-    const driverPhone = driver.driver_phone || driver.contact_number;
+    const driverName = driver.name || driver.driver_name || 'Driver';
     text += `**Driver:** ${driverName}`;
     if (driver.vehicle_type) text += ` · ${driver.vehicle_type}`;
-    if (driverPhone) text += ` · ${driverPhone}`;
+    if (driver.driver_phone || driver.contact_number) text += ` · ${driver.driver_phone || driver.contact_number}`;
     text += '\n';
   }
+  text += `\n_Reference: ${transfer._id}_`;
   return text.trim();
 }
 
@@ -142,11 +232,10 @@ function getHelpResponse() {
   return (
     `**How can I help?**\n\n` +
     `I can look up your transfer status. Try:\n\n` +
-    `• "Status of APX123456" or "APX123456"\n` +
-    `• "What's the status for John Smith"\n` +
-    `• "Where is my transfer APX123456"\n` +
-    `• "Track transfer for Jane Doe"\n\n` +
-    `Use your **Apex ID** (e.g. APX123456) or your **name** as it appears in the booking.`
+    `• **Company + Traveler:** "Status for [Company], [Traveler]" or "Track [Company] - [Traveler]"\n` +
+    `• **Apex ID:** "APX123456" or "Status of APX123456"\n` +
+    `• **Name:** "What's the status for John Smith"\n\n` +
+    `Clients often search by **company name first**, then **traveler name**.`
   );
 }
 
@@ -179,14 +268,13 @@ const handleChat = async (req, res) => {
       return res.json({
         success: true,
         reply:
-          `I didn't understand that. ` +
-          `You can ask for transfer status using your Apex ID (e.g. APX123456) or your name. ` +
-          `Type **help** for more options.`,
+          `I didn't understand that. Try **company + traveler**, your **Apex ID**, or your **name**. Type **help** for more options.`,
         intent: 'unknown',
       });
     }
 
     let transfer = null;
+    let displayIdentifier = identifier;
 
     if (intent === 'tracking_status') {
       const isApexId = /^APX[A-Z0-9]+$/i.test(identifier);
@@ -195,6 +283,27 @@ const handleChat = async (req, res) => {
       } else {
         transfer = await findTransferByName(identifier);
       }
+    } else if (intent === 'tracking_by_company_traveler' && identifier && typeof identifier === 'object') {
+      const { company, traveler } = identifier;
+      transfer = await findTransferByCompanyAndTraveler(company, traveler);
+      displayIdentifier = `${company} - ${traveler}`;
+    } else if (intent === 'tracking_by_company') {
+      const transfers = await findTransferByCompany(identifier);
+      if (transfers.length === 1) {
+        transfer = transfers[0];
+      } else if (transfers.length > 1) {
+        const travelerNames = [...new Set(
+          transfers.flatMap(t => [
+            t.traveler_details?.name,
+            t.customer_details?.name,
+          ].filter(Boolean))
+        )].slice(0, 5);
+        return res.json({
+          success: true,
+          reply: `I found ${transfers.length} transfers for **${identifier}**. Which traveler? (e.g. ${travelerNames.join(', ')}${travelerNames.length < transfers.length ? '...' : ''})\n\nTry: "Status for ${identifier}, [traveler name]"`,
+          intent,
+        });
+      }
     } else if (intent === 'tracking_by_name') {
       transfer = await findTransferByName(identifier);
     }
@@ -202,7 +311,7 @@ const handleChat = async (req, res) => {
     if (!transfer) {
       return res.json({
         success: true,
-        reply: `I couldn't find a transfer for "${identifier}". Please check your Apex ID or name and try again. You can also visit the Tracking page to search.`,
+        reply: `I couldn't find a transfer for "${displayIdentifier}". Try your **company name** and **traveler name**, or your Apex ID. Visit the Tracking page to search.`,
         intent,
       });
     }

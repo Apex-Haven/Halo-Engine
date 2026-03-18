@@ -365,6 +365,62 @@ router.post('/check-conflicts', authenticate, async (req, res) => {
   }
 });
 
+// Bulk clear – reset vendor, driver, return driver, and status to pending
+router.put('/clear', authenticate, async (req, res) => {
+  try {
+    const { transferIds } = req.body;
+
+    if (!transferIds || !Array.isArray(transferIds) || transferIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transfer IDs are required'
+      });
+    }
+
+    // Reset vendor, drivers, and onward status for all selected transfers
+    const result = await Transfer.updateMany(
+      { _id: { $in: transferIds } },
+      {
+        $set: {
+          vendor_details: null,
+          assigned_driver_details: null,
+          return_assigned_driver_details: null,
+          'transfer_details.transfer_status': 'pending'
+        },
+        $push: {
+          audit_log: {
+            action: 'updated',
+            timestamp: new Date(),
+            by: req.user.email,
+            details: 'Vendor, driver, and status reset to fresh'
+          }
+        }
+      }
+    );
+
+    // Reset return leg status only for transfers that have return
+    await Transfer.updateMany(
+      {
+        _id: { $in: transferIds },
+        return_transfer_details: { $exists: true, $ne: null }
+      },
+      { $set: { 'return_transfer_details.transfer_status': 'pending' } }
+    );
+
+    res.json({
+      success: true,
+      message: `Cleared vendor, driver, and status for ${result.modifiedCount} transfer(s)`,
+      updatedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error in bulk clear:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clear transfers'
+    });
+  }
+});
+
 // Bulk delete transfers
 router.delete('/', authenticate, async (req, res) => {
   try {

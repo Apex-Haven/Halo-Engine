@@ -478,6 +478,86 @@ const updateTransfer = async (req, res) => {
   }
 };
 
+// Map FlightStats status to our allowed values
+const mapFlightStatus = (status) => {
+  if (!status || typeof status !== 'string') return 'on_time';
+  const s = status.toLowerCase();
+  const valid = ['on_time', 'delayed', 'landed', 'cancelled', 'boarding', 'departed'];
+  if (valid.includes(s)) return s;
+  if (['scheduled', 'ontime', 'on time'].includes(s)) return 'on_time';
+  if (['delay'].includes(s)) return 'delayed';
+  if (['arrived', 'arrival'].includes(s)) return 'landed';
+  if (['canceled', 'cancel'].includes(s)) return 'cancelled';
+  if (['board'].includes(s)) return 'boarding';
+  if (['departure'].includes(s)) return 'departed';
+  return 'on_time';
+};
+
+// Update flight details only (partial update - no full transfer validation)
+const updateFlightDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { flight_details, return_flight_details, return_transfer_details } = req.body;
+
+    const transfer = await Transfer.findById(id);
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transfer not found',
+        apexId: id
+      });
+    }
+
+    if (flight_details) {
+      const normalized = {
+        ...flight_details,
+        status: mapFlightStatus(flight_details.status)
+      };
+      transfer.flight_details = {
+        ...(transfer.flight_details?.toObject ? transfer.flight_details.toObject() : transfer.flight_details || {}),
+        ...normalized
+      };
+    }
+
+    if (return_flight_details !== undefined) {
+      if (return_flight_details === null) {
+        transfer.return_flight_details = null;
+      } else {
+        const normalized = {
+          ...return_flight_details,
+          status: mapFlightStatus(return_flight_details.status)
+        };
+        transfer.return_flight_details = {
+          ...(transfer.return_flight_details?.toObject ? transfer.return_flight_details.toObject() : transfer.return_flight_details || {}),
+          ...normalized
+        };
+      }
+    }
+
+    if (return_transfer_details && Object.keys(return_transfer_details).length > 0) {
+      transfer.return_transfer_details = {
+        ...(transfer.return_transfer_details?.toObject ? transfer.return_transfer_details.toObject() : transfer.return_transfer_details || {}),
+        ...return_transfer_details
+      };
+    }
+
+    await transfer.save();
+
+    res.json({
+      success: true,
+      message: 'Flight details updated successfully',
+      data: transfer
+    });
+  } catch (error) {
+    console.error('Error updating flight details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update flight details',
+      error: error.message
+    });
+  }
+};
+
 // Assign vendor to transfer (admin only) - makes transfer visible to that vendor
 const assignVendor = async (req, res) => {
   try {
@@ -1311,6 +1391,7 @@ module.exports = {
   getTransfer,
   getTransfers,
   updateTransfer,
+  updateFlightDetails,
   assignDriver,
   assignReturnDriver,
   updateDriverStatus,
