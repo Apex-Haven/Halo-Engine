@@ -1023,76 +1023,83 @@ const deleteTransfer = async (req, res) => {
   }
 };
 
-// Get transfer statistics
+// Get transfer statistics (admin: all; client: own transfers only)
 const getTransferStats = async (req, res) => {
   try {
-    // Get status aggregation - use correct field path
+    const baseFilter = {};
+    if (req.user && req.user.role === 'CLIENT') {
+      baseFilter.customer_id = req.user._id;
+    }
+
+    const today = new Date();
+    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+    const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+    // Status aggregation
     const stats = await Transfer.aggregate([
-      {
-        $group: {
-          _id: '$transfer_details.transfer_status',
-          count: { $sum: 1 }
-        }
-      }
+      { $match: baseFilter },
+      { $group: { _id: '$transfer_details.transfer_status', count: { $sum: 1 } } }
     ]);
 
-    const totalTransfers = await Transfer.countDocuments();
-    
-    // Today's transfers - use correct field path
-    const today = new Date();
-    const startOfDay = new Date(today.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(today.setHours(23, 59, 59, 999));
-    const todayTransfers = await Transfer.countDocuments({
-      'flight_details.arrival_time': {
-        $gte: startOfDay,
-        $lte: endOfDay
-      }
+    const totalTransfers = await Transfer.countDocuments(baseFilter);
+
+    // Arrivals today (onward flight arrival_time)
+    const todayArrivals = await Transfer.countDocuments({
+      ...baseFilter,
+      'flight_details.arrival_time': { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    // Departures today (onward departure OR return departure)
+    const todayDepartures = await Transfer.countDocuments({
+      ...baseFilter,
+      $or: [
+        { 'flight_details.departure_time': { $gte: startOfDay, $lte: endOfDay } },
+        { 'return_flight_details.departure_time': { $gte: startOfDay, $lte: endOfDay } }
+      ]
     });
 
     const upcomingTransfers = await Transfer.countDocuments({
+      ...baseFilter,
       'flight_details.arrival_time': { $gte: new Date() },
-      'transfer_details.transfer_status': { $in: ['pending', 'assigned', 'enroute'] }
+      'transfer_details.transfer_status': { $in: ['pending', 'assigned', 'enroute', 'waiting', 'in_progress'] }
     });
 
-    // Calculate success rate (completed / total)
     const completedCount = stats.find(s => s._id === 'completed')?.count || 0;
-    const successRate = totalTransfers > 0 
-      ? Math.round((completedCount / totalTransfers) * 100 * 10) / 10 // Round to 1 decimal
+    const successRate = totalTransfers > 0
+      ? Math.round((completedCount / totalTransfers) * 100 * 10) / 10
       : 0;
 
-    // Count active drivers (drivers with assigned transfers)
-    const activeDriversResult = await Transfer.aggregate([
-      {
-        $match: {
-          'assigned_driver_details.driver_id': { $exists: true, $ne: null },
-          'transfer_details.transfer_status': { $in: ['assigned', 'enroute', 'waiting', 'in_progress'] }
-        }
-      },
-      {
-        $group: {
-          _id: '$assigned_driver_details.driver_id'
-        }
-      },
-      {
-        $count: 'activeDrivers'
-      }
-    ]);
-    const activeDrivers = activeDriversResult[0]?.activeDrivers || 0;
+    const byStatus = stats.reduce((acc, stat) => {
+      acc[stat._id] = stat.count;
+      return acc;
+    }, {});
 
-    res.json({
-      success: true,
-      data: {
-        total: totalTransfers,
-        today: todayTransfers,
-        upcoming: upcomingTransfers,
-        successRate: successRate,
-        activeDrivers: activeDrivers,
-        byStatus: stats.reduce((acc, stat) => {
-          acc[stat._id] = stat.count;
-          return acc;
-        }, {})
-      }
-    });
+    const data = {
+      total: totalTransfers,
+      todayArrivals,
+      todayDepartures,
+      upcoming: upcomingTransfers,
+      successRate,
+      byStatus
+    };
+
+    // Active drivers only for admin roles
+    if (req.user && !['CLIENT', 'TRAVELER', 'DRIVER'].includes(req.user.role)) {
+      const activeDriversResult = await Transfer.aggregate([
+        { $match: baseFilter },
+        {
+          $match: {
+            'assigned_driver_details.driver_id': { $exists: true, $ne: null },
+            'transfer_details.transfer_status': { $in: ['assigned', 'enroute', 'waiting', 'in_progress'] }
+          }
+        },
+        { $group: { _id: '$assigned_driver_details.driver_id' } },
+        { $count: 'activeDrivers' }
+      ]);
+      data.activeDrivers = activeDriversResult[0]?.activeDrivers || 0;
+    }
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Error fetching transfer stats:', error);
     res.status(500).json({

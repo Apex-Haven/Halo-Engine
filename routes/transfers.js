@@ -65,10 +65,10 @@ router.get('/', authenticate, validateQueryParams, getTransfers);
 
 /**
  * @route   GET /api/transfers/stats
- * @desc    Get transfer statistics
- * @access  Private (Admin, Operations Manager, Vendor Manager)
+ * @desc    Get transfer statistics (admin: all; client: own only)
+ * @access  Private (Admin, Operations Manager, Vendor Manager, Client)
  */
-router.get('/stats', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER'), getTransferStats);
+router.get('/stats', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIONS_MANAGER', 'VENDOR_MANAGER', 'CLIENT'), getTransferStats);
 
 /**
  * @route   GET /api/transfers/:id
