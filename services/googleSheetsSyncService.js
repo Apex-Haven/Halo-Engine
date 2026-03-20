@@ -159,6 +159,7 @@ class GoogleSheetsSyncService {
       'lastname': 'lastName',
       'last_name': 'lastName',
       'lname': 'lastName',
+      'salutation': 'salutation',
       'fullname': 'fullName',
       'full_name': 'fullName',
       'name': 'fullName',
@@ -269,6 +270,7 @@ class GoogleSheetsSyncService {
         lastName = lastName || parts[0] || ''; // use same for last if single word
       }
     }
+    const salutation = getValue('salutation');
     const email = getValue('email');
     const phone = getValue('phone');
     const client = getValue('client');
@@ -351,6 +353,7 @@ class GoogleSheetsSyncService {
     return {
       valid: true,
       data: {
+        salutation: salutation || undefined,
         firstName,
         lastName,
         email: email.toLowerCase(),
@@ -525,6 +528,8 @@ class GoogleSheetsSyncService {
 
     const primary = {
       name: name || email,
+      firstName: firstName || '',
+      lastName: lastName || '',
       email: email.toLowerCase(),
       phone,
       salutation: salutation || undefined,
@@ -857,8 +862,8 @@ class GoogleSheetsSyncService {
     if (!email) return { user: null, created: false };
 
     const nameParts = (delegate.name || '').trim().split(/\s+/);
-    const firstName = nameParts[0] || delegate.email?.split('@')[0] || 'Traveler';
-    const lastName = nameParts.slice(1).join(' ') || firstName;
+    const firstName = delegate.firstName || nameParts[0] || delegate.email?.split('@')[0] || 'Traveler';
+    const lastName = delegate.lastName || (delegate.firstName ? nameParts.slice(1).join(' ') : nameParts.slice(1).join(' ')) || firstName;
     const phone = this.normalizePhoneToE164(delegate.phone);
 
     const existingTraveler = await User.findOne({
@@ -867,6 +872,12 @@ class GoogleSheetsSyncService {
     });
 
     if (existingTraveler) {
+      // Update salutation if provided and different
+      if (delegate.salutation !== undefined && existingTraveler.profile) {
+        existingTraveler.profile.salutation = delegate.salutation || '';
+        existingTraveler.markModified('profile');
+        await existingTraveler.save();
+      }
       return { user: existingTraveler, created: false };
     }
 
@@ -887,6 +898,7 @@ class GoogleSheetsSyncService {
       password: hashedPassword,
       role: 'TRAVELER',
       profile: {
+        salutation: delegate.salutation || '',
         firstName,
         lastName,
         ...(phoneE164 && { phone: phoneE164 }),
@@ -1076,7 +1088,7 @@ class GoogleSheetsSyncService {
             continue;
           }
 
-          const { firstName, lastName, email, phone, client, username, password } = parsed.data;
+          const { salutation, firstName, lastName, email, phone, client, username, password } = parsed.data;
 
           // Find or determine client
           let createdByUserId = syncUserId;
@@ -1126,6 +1138,7 @@ class GoogleSheetsSyncService {
 
           if (existingTraveler) {
             // Update existing traveler
+            if (salutation !== undefined) existingTraveler.profile.salutation = salutation || '';
             existingTraveler.profile.firstName = firstName;
             existingTraveler.profile.lastName = lastName;
             if (phone) {
@@ -1169,6 +1182,7 @@ class GoogleSheetsSyncService {
               password: hashedPassword,
               role: 'TRAVELER',
               profile: {
+                salutation: salutation || '',
                 firstName,
                 lastName,
                 phone: phone || ''
@@ -1279,7 +1293,7 @@ class GoogleSheetsSyncService {
 
           // Create or find Traveler users for primary and delegate 2
           const primaryTravelerResult = await this.createOrFindTravelerFromDelegate(
-            { name: primary.name, email: primary.email, phone: primary.phone, job_position: primary.job_position, company_name: primary.company_name, consent_email: primary.consent_email, consent_whatsapp: primary.consent_whatsapp, whatsapp_number: primary.whatsapp_number },
+            { name: primary.name, salutation: primary.salutation, firstName: primary.firstName, lastName: primary.lastName, email: primary.email, phone: primary.phone, job_position: primary.job_position, company_name: primary.company_name, consent_email: primary.consent_email, consent_whatsapp: primary.consent_whatsapp, whatsapp_number: primary.whatsapp_number },
             customerId
           );
           let primaryTravelerId = primaryTravelerResult.user ? primaryTravelerResult.user._id : null;

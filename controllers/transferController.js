@@ -280,6 +280,7 @@ const getTransfer = async (req, res) => {
     const { id } = req.params;
     
     const transfer = await Transfer.findById(id)
+      .populate('traveler_id', 'username email profile')
       .populate('delegates.traveler_id', 'username email profile');
     if (!transfer) {
       return res.status(404).json({
@@ -391,6 +392,8 @@ const getTransfers = async (req, res) => {
     // Execute query with pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const transfers = await Transfer.find(filter)
+      .populate('traveler_id', 'username email profile')
+      .populate('delegates.traveler_id', 'username email profile')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip(skip)
@@ -1263,10 +1266,13 @@ const updateClientDetails = async (req, res) => {
 
     await transfer.save();
 
+    const populated = await Transfer.findById(transfer._id)
+      .populate('traveler_id', 'username email profile')
+      .populate('delegates.traveler_id', 'username email profile');
     res.status(200).json({
       success: true,
       message: 'Transfer details updated successfully',
-      data: transfer
+      data: populated
     });
   } catch (error) {
     console.error('Error updating client details:', error);

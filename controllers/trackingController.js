@@ -114,6 +114,9 @@ const getTransferForTracking = async (req, res) => {
       });
     }
 
+    // Populate delegates for display
+    transfer = await Transfer.findById(transfer._id).populate('delegates.traveler_id', 'username email profile');
+
     // Convert transfer to plain object if it's a Mongoose document
     const transferObj = transfer.toObject ? transfer.toObject() : transfer;
     
@@ -402,7 +405,7 @@ const getCompaniesForTracking = async (req, res) => {
   }
 };
 
-// Get travelers for a given company (public)
+// Get travelers for a given company (public) - includes primary traveler and delegates
 const getTravelersForCompany = async (req, res) => {
   try {
     const { company } = req.query;
@@ -415,7 +418,7 @@ const getTravelersForCompany = async (req, res) => {
         { 'customer_details.company_name': companyRegex },
         { 'traveler_details.company_name': companyRegex }
       ]
-    }).select('customer_details.name traveler_details.name').lean();
+    }).select('customer_details.name traveler_details.name delegates').populate('delegates.traveler_id', 'profile.firstName profile.lastName email').lean();
 
     const names = new Set();
     transfers.forEach(t => {
@@ -423,6 +426,13 @@ const getTravelersForCompany = async (req, res) => {
       const n2 = t.customer_details?.name?.trim?.();
       if (n1) names.add(n1);
       if (n2) names.add(n2);
+      (t.delegates || []).forEach(d => {
+        const u = d.traveler_id;
+        if (u?.profile) {
+          const name = [u.profile.firstName, u.profile.lastName].filter(Boolean).join(' ').trim();
+          if (name) names.add(name);
+        }
+      });
     });
     const list = [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
     res.json({ success: true, data: list });
@@ -446,7 +456,8 @@ const searchTransferByCompanyAndTraveler = async (req, res) => {
     const companyRegex = new RegExp(company.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     const travelerRegex = new RegExp(traveler.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-    const transfers = await Transfer.find({
+    // First try primary/customer name match
+    let transfers = await Transfer.find({
       $and: [
         {
           $or: [
@@ -463,6 +474,31 @@ const searchTransferByCompanyAndTraveler = async (req, res) => {
       ]
     }).limit(20).sort({ createdAt: -1, create_time: -1 });
 
+    // If no match, try delegate names (travelers in same car)
+    if (transfers.length === 0) {
+      const User = require('../models/User');
+      const delegateUsers = await User.find({
+        $or: [
+          { 'profile.firstName': travelerRegex },
+          { 'profile.lastName': travelerRegex }
+        ]
+      }).select('_id').lean();
+      const delegateIds = delegateUsers.map(u => u._id);
+      if (delegateIds.length > 0) {
+        transfers = await Transfer.find({
+          $and: [
+            {
+              $or: [
+                { 'customer_details.company_name': companyRegex },
+                { 'traveler_details.company_name': companyRegex }
+              ]
+            },
+            { 'delegates.traveler_id': { $in: delegateIds } }
+          ]
+        }).limit(20).sort({ createdAt: -1, create_time: -1 });
+      }
+    }
+
     if (transfers.length === 0) {
       return res.status(404).json({
         success: false,
@@ -470,7 +506,9 @@ const searchTransferByCompanyAndTraveler = async (req, res) => {
       });
     }
 
-    const transfer = transfers[0];
+    let transfer = transfers[0];
+    // Populate delegates for tracking display
+    transfer = await Transfer.findById(transfer._id).populate('delegates.traveler_id', 'username email profile');
     const transferObj = transfer.toObject ? transfer.toObject() : transfer;
 
     let actualLocation = null;
