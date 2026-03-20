@@ -37,6 +37,24 @@ const INTENTS = [
     extractId: (match) => match[1].trim(),
   },
   {
+    name: 'company_details_help',
+    patterns: [
+      /^company\s+details$/i,
+      /^how\s+(?:do i\s+)?(?:get\s+)?company\s+details\??$/i,
+    ],
+    extractId: () => null,
+  },
+  {
+    name: 'company_details',
+    patterns: [
+      /(?:company\s+)?details\s+(?:for\s+)?(?:company\s+)?([A-Za-z0-9\s&.,'-]{2,80})$/i,
+      /(?:info|information)\s+(?:for\s+)?(?:company\s+)?([A-Za-z0-9\s&.,'-]{2,80})$/i,
+      /(?:who\s+is|who'?s)\s+(?:the\s+)?contact\s+(?:for\s+)?(?:company\s+)?([A-Za-z0-9\s&.,'-]{2,80})$/i,
+      /(?:company\s+)?([A-Za-z0-9\s&.,'-]{2,80})\s+(?:details|info|information|contact)/i,
+    ],
+    extractId: (match) => match[1].trim(),
+  },
+  {
     name: 'tracking_by_name',
     patterns: [
       /status\s+(?:of\s+)?(?:transfer\s+)?(?:for\s+)?([A-Za-z\s]{2,50})/i,
@@ -195,6 +213,8 @@ function cleanValue(val, fallback = '—') {
 function buildTransferResponse(transfer) {
   const td = transfer.transfer_details || {};
   const fd = transfer.flight_details || {};
+  const cd = transfer.customer_details || {};
+  const trav = transfer.traveler_details || {};
   const driver = transfer.assigned_driver_details;
   const { label: statusLabel, description: statusDesc } = getStatusDisplay(transfer);
 
@@ -204,9 +224,22 @@ function buildTransferResponse(transfer) {
   const airlineClean = fd.airline ? cleanValue(fd.airline) : null;
   const flightDisplay = hasRealFlight ? `${fd.flight_no}${airlineClean ? ` (${airlineClean})` : ''}` : null;
 
+  const companyName = cleanValue(cd.company_name) || cleanValue(trav.company_name);
+  const contactName = cleanValue(cd.name) || cleanValue(trav.name);
+  const contactEmail = cleanValue(cd.email);
+  const contactPhone = cleanValue(cd.contact_number) || cleanValue(cd.whatsapp_number);
+
   let text = `Here's your transfer status.\n\n`;
   text += `**${statusLabel}**\n`;
   text += `${statusDesc}\n\n`;
+  if (companyName || contactName || contactEmail || contactPhone) {
+    text += `**Company details**\n`;
+    if (companyName) text += `Company: ${companyName}\n`;
+    if (contactName) text += `Contact: ${contactName}\n`;
+    if (contactEmail) text += `Email: ${contactEmail}\n`;
+    if (contactPhone) text += `Phone: ${contactPhone}\n`;
+    text += '\n';
+  }
   text += `**Route:** ${pickupLoc} → ${dropLoc}\n`;
   if (td.estimated_pickup_time) {
     const pickupStr = formatDateTime(td.estimated_pickup_time);
@@ -228,14 +261,24 @@ function buildTransferResponse(transfer) {
   return text.trim();
 }
 
+function getCompanyDetailsHelpResponse() {
+  return (
+    `**Company details**\n\n` +
+    `To get company info (contacts, email, phone), type:\n\n` +
+    `**Company details for [Company Name]**\n\n` +
+    `Replace [Company Name] with the actual company, e.g. "Acme Corp" or "ABC Ltd".`
+  );
+}
+
 function getHelpResponse() {
   return (
     `**How can I help?**\n\n` +
-    `I can look up your transfer status. Try:\n\n` +
+    `I can look up your transfer status and company details. Try:\n\n` +
     `• **Company + Traveler:** "Status for [Company], [Traveler]" or "Track [Company] - [Traveler]"\n` +
     `• **Apex ID:** "APX123456" or "Status of APX123456"\n` +
-    `• **Name:** "What's the status for John Smith"\n\n` +
-    `Clients often search by **company name first**, then **traveler name**.`
+    `• **Name:** "What's the status for John Smith"\n` +
+    `• **Company details:** "Company details for [Company]" or "Details for [Company]"\n\n` +
+    `Responses include company name, contact, email, and phone when available.`
   );
 }
 
@@ -261,6 +304,14 @@ const handleChat = async (req, res) => {
         success: true,
         reply: getHelpResponse(),
         intent: 'help',
+      });
+    }
+
+    if (intent === 'company_details_help') {
+      return res.json({
+        success: true,
+        reply: getCompanyDetailsHelpResponse(),
+        intent: 'company_details_help',
       });
     }
 
@@ -298,14 +349,72 @@ const handleChat = async (req, res) => {
             t.customer_details?.name,
           ].filter(Boolean))
         )].slice(0, 5);
+        const suggestions = travelerNames.map(name =>
+          `Status for ${identifier}, ${name}`
+        );
         return res.json({
           success: true,
-          reply: `I found ${transfers.length} transfers for **${identifier}**. Which traveler? (e.g. ${travelerNames.join(', ')}${travelerNames.length < transfers.length ? '...' : ''})\n\nTry: "Status for ${identifier}, [traveler name]"`,
+          reply: `I found ${transfers.length} transfers for **${identifier}**. Which traveler?`,
           intent,
+          suggestions: suggestions.length > 0 ? suggestions : undefined,
         });
       }
     } else if (intent === 'tracking_by_name') {
       transfer = await findTransferByName(identifier);
+    } else if (intent === 'company_details') {
+      const transfers = await findTransferByCompany(identifier);
+      if (transfers.length === 0) {
+        return res.json({
+          success: true,
+          reply: `I couldn't find any transfers or company details for "${identifier}". Try a different company name or check the spelling.`,
+          intent,
+        });
+      }
+      const t = transfers[0];
+      const cd = t.customer_details || {};
+      const trav = t.traveler_details || {};
+      const companyName = cleanValue(cd.company_name) || cleanValue(trav.company_name) || identifier;
+
+      const contactMap = new Map();
+      for (const x of transfers) {
+        const c = x.customer_details || {};
+        const name = cleanValue(c.name) || cleanValue(x.traveler_details?.name);
+        const email = cleanValue(c.email);
+        const phone = cleanValue(c.contact_number) || cleanValue(c.whatsapp_number);
+        if (name || email || phone) {
+          const key = `${name || ''}|${email || ''}|${phone || ''}`;
+          if (!contactMap.has(key)) contactMap.set(key, { name, email, phone });
+        }
+      }
+      const uniqueContacts = Array.from(contactMap.values());
+
+      const travelerNames = [...new Set(
+        transfers.flatMap(t => [
+          t.traveler_details?.name,
+          t.customer_details?.name,
+        ].filter(Boolean))
+      )].slice(0, 5);
+      const suggestions = travelerNames.map(name =>
+        `Status for ${identifier}, ${name}`
+      );
+
+      let reply = `**Company: ${companyName}**\n\n`;
+      reply += `**Transfers:** ${transfers.length} found\n\n`;
+      if (uniqueContacts.length > 0) {
+        reply += `**Contacts:**\n`;
+        uniqueContacts.slice(0, 5).forEach((c, i) => {
+          reply += `${i + 1}. ${c.name || '—'}`;
+          if (c.email) reply += ` · ${c.email}`;
+          if (c.phone) reply += ` · ${c.phone}`;
+          reply += '\n';
+        });
+      }
+      return res.json({
+        success: true,
+        reply: reply.trim(),
+        intent,
+        suggestions: suggestions.length > 0 ? suggestions : undefined,
+      });
     }
 
     if (!transfer) {

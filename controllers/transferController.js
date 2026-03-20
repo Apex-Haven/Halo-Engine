@@ -365,6 +365,9 @@ const getTransfers = async (req, res) => {
       const searchConditions = [
         { _id: { $regex: search, $options: 'i' } },
         { 'customer_details.name': { $regex: search, $options: 'i' } },
+        { 'customer_details.company_name': { $regex: search, $options: 'i' } },
+        { 'traveler_details.name': { $regex: search, $options: 'i' } },
+        { 'traveler_details.company_name': { $regex: search, $options: 'i' } },
         { 'customer_details.email': { $regex: search, $options: 'i' } },
         { 'flight_details.flight_no': { $regex: search, $options: 'i' } },
         { 'vendor_details.vendor_name': { $regex: search, $options: 'i' } }
@@ -1043,18 +1046,28 @@ const getTransferStats = async (req, res) => {
 
     const totalTransfers = await Transfer.countDocuments(baseFilter);
 
-    // Arrivals today (onward flight arrival_time)
+    // Placeholder flights (XX000, TBD, etc.) – exclude from today counts; sync uses nowIso when no date
+    const placeholderFlights = ['', 'XX000', 'TBD', 'N/A'];
+
+    // Arrivals today (onward flight arrival_time) – only real flights, not placeholders
     const todayArrivals = await Transfer.countDocuments({
       ...baseFilter,
-      'flight_details.arrival_time': { $gte: startOfDay, $lte: endOfDay }
+      'flight_details.arrival_time': { $gte: startOfDay, $lte: endOfDay },
+      'flight_details.flight_no': { $exists: true, $nin: placeholderFlights }
     });
 
-    // Departures today (onward departure OR return departure)
+    // Departures today (onward departure OR return departure) – only real flights
     const todayDepartures = await Transfer.countDocuments({
       ...baseFilter,
       $or: [
-        { 'flight_details.departure_time': { $gte: startOfDay, $lte: endOfDay } },
-        { 'return_flight_details.departure_time': { $gte: startOfDay, $lte: endOfDay } }
+        {
+          'flight_details.departure_time': { $gte: startOfDay, $lte: endOfDay },
+          'flight_details.flight_no': { $exists: true, $nin: placeholderFlights }
+        },
+        {
+          'return_flight_details.departure_time': { $gte: startOfDay, $lte: endOfDay },
+          'return_flight_details.flight_no': { $exists: true, $nin: placeholderFlights }
+        }
       ]
     });
 

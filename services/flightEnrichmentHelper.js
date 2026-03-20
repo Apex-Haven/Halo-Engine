@@ -2,6 +2,30 @@ const flightStatsService = require('./flightStatsService');
 
 const PLACEHOLDER_FLIGHTS = ['XX000', 'TBD', 'N/A', ''];
 
+/** IATA airline code → airline name (fallback when FlightStats/API returns TBD) */
+const AIRLINE_BY_CODE = {
+  EY: 'Etihad Airways',
+  SQ: 'Singapore Airlines',
+  MH: 'Malaysia Airlines',
+  EK: 'Emirates',
+  TK: 'Turkish Airlines',
+  BR: 'EVA Air',
+  BA: 'British Airways',
+  CX: 'Cathay Pacific',
+  NH: 'All Nippon Airways',
+  UA: 'United Airlines',
+  QR: 'Qatar Airways',
+  AI: 'Air India',
+  LH: 'Lufthansa',
+  AF: 'Air France',
+  KL: 'KLM',
+  QF: 'Qantas',
+  TG: 'Thai Airways',
+  CZ: 'China Southern',
+  CA: 'Air China',
+  MU: 'China Eastern',
+};
+
 const FLIGHTSTATS_STATUS_MAP = {
   L: 'landed',
   D: 'departed',
@@ -12,6 +36,19 @@ const FLIGHTSTATS_STATUS_MAP = {
   R: 'delayed',
   U: 'on_time'
 };
+
+/**
+ * Get airline name from flight number using hardcoded IATA code mapping
+ * @param {string} flightNo - e.g. EK344, MH 195, UA 7905
+ * @returns {string|null} Airline name or null if unknown
+ */
+function getAirlineFromFlightNumber(flightNo) {
+  if (!flightNo || typeof flightNo !== 'string') return null;
+  const normalized = flightNo.replace(/\s/g, '').trim().toUpperCase();
+  const match = normalized.match(/^([A-Z0-9]{2})\d/);
+  if (!match) return null;
+  return AIRLINE_BY_CODE[match[1]] || null;
+}
 
 /**
  * Check if flight number looks like a real one (not placeholder)
@@ -36,9 +73,10 @@ function mapFlightStatsToTransfer(fs, opts = {}) {
   const depTime = !keepTimesFromInput && fs.departureTime ? new Date(fs.departureTime) : null;
   const arrTime = !keepTimesFromInput && fs.arrivalTime ? new Date(fs.arrivalTime) : null;
   const status = FLIGHTSTATS_STATUS_MAP[fs.statusCode] || (fs.isCanceled ? 'cancelled' : fs.isLanded ? 'landed' : 'on_time');
+  const airlineFromMap = getAirlineFromFlightNumber(fs.flight);
   return {
     flight_no: (fs.flight || '').toUpperCase(),
-    airline: fs.airlineName || 'TBD',
+    airline: fs.airlineName || airlineFromMap || 'TBD',
     departure_airport: (fs.departureAirport || 'TBD').toString().toUpperCase().slice(0, 3),
     arrival_airport: (fs.arrivalAirport || 'TBD').toString().toUpperCase().slice(0, 3),
     departure_time: depTime,
@@ -84,16 +122,28 @@ async function enrichFlightDetails(flightDetails, flightDate) {
       }
     }
   } catch (e) {
-    console.warn(`[FlightEnrichment] ✗ ${flightDetails.flight_no} (${dateForLog}): ${e.message} – using TBD`);
+    console.warn(`[FlightEnrichment] ✗ ${flightDetails.flight_no} (${dateForLog}): ${e.message} – using fallback airline`);
   }
 
-  if (!enriched) return null;
+  const fallbackAirline = getAirlineFromFlightNumber(flightDetails.flight_no);
+  if (!enriched) {
+    if (fallbackAirline) {
+      return {
+        ...flightDetails,
+        airline: fallbackAirline,
+        departure_airport: (flightDetails.departure_airport || 'TBD').toString().toUpperCase().slice(0, 3),
+        arrival_airport: (flightDetails.arrival_airport || 'TBD').toString().toUpperCase().slice(0, 3),
+      };
+    }
+    return null;
+  }
 
   const depAirport = (enriched.departure_airport || flightDetails.departure_airport || 'TBD').toString().toUpperCase().slice(0, 3);
   const arrAirport = (enriched.arrival_airport || flightDetails.arrival_airport || 'TBD').toString().toUpperCase().slice(0, 3);
+  const resolvedAirline = (enriched.airline && enriched.airline !== 'TBD') ? enriched.airline : (fallbackAirline || flightDetails.airline || 'TBD');
   return {
     ...flightDetails,
-    airline: enriched.airline || flightDetails.airline || 'TBD',
+    airline: resolvedAirline,
     departure_airport: depAirport,
     arrival_airport: arrAirport,
     departure_airport_name: enriched.departure_airport_name || null,
