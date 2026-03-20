@@ -363,9 +363,13 @@ class GoogleSheetsSyncService {
   }
 
   /**
-   * Build column index map for transfer sync format (handles duplicate headers).
-   * Format: Company Name, Salutation, First Name, Last Name, Name As Per Passport,
-   * Contact No, Email, ..., Check In Date, Flight No, ETA, Check In Date, Check Out Date, Flight No, ETD, ...
+   * Build column index map for transfer sync format.
+   * New format: Confirmation, Company Name, Salutation, First Name, Last Name, Name As Per Passport,
+   * Contact No, Email, Onward Flight No, Onward Flight Dep. Airport, Onward Flight Dep. Date,
+   * Onward Flight ETD, Onward Flight Arr. Airport, Onward Flight Arr. Date, Onward Flight ETA,
+   * Return Flight No, Return Flight Dep. Airport, Return Flight Dep. Date, Return Flight ETD,
+   * Return Flight Arr. Airport, Return Flight Arr. Date, Return Flight ETA
+   * Also supports legacy: Check In Date, Flight No, ETA, Check Out Date, Flight No, ETD
    * @param {string[]} headers - Header row from CSV
    * @returns {Object} Map of field name -> column index
    */
@@ -375,29 +379,54 @@ class GoogleSheetsSyncService {
         .trim()
         .toLowerCase()
         .replace(/\s+/g, '')
-        .replace(/[\-_()/:&]/g, '');
+        .replace(/[.\-_()/:&]/g, '');
     const map = {};
     const seen = {};
     for (let i = 0; i < headers.length; i++) {
       const n = normalize(headers[i]);
       if (!n) continue;
-      // Handle duplicates: first "Check In Date" -> arrivalCheckInDate, second -> returnCheckInDate
-      // First "Flight No" -> arrivalFlightNo, second -> returnFlightNo
-      if (n === 'checkindate') {
+      // New format: explicit Onward / Return columns
+      if (n === 'onwardflightno') map.arrivalFlightNo = i;
+      else if (n === 'onwardflightdepairport') map.onwardDepAirport = i;
+      else if (n === 'onwardflightdepdate') map.onwardDepDate = i;
+      else if (n === 'onwardflightetd') map.onwardETD = i;
+      else if (n === 'onwardflightarrairport') map.onwardArrAirport = i;
+      else if (n === 'onwardflightarrdate') map.onwardArrDate = i;
+      else if (n === 'onwardflighteta') map.onwardETA = i;
+      else if (n === 'returnflightno') map.returnFlightNo = i;
+      else if (n === 'returnflightdepairport') map.returnDepAirport = i;
+      else if (n === 'returnflightdepdate') map.returnDepDate = i;
+      else if (n === 'returnflightetd') map.returnETD = i;
+      else if (n === 'returnflightarrairport') map.returnArrAirport = i;
+      else if (n === 'returnflightarrdate') map.returnArrDate = i;
+      else if (n === 'returnflighteta') map.returnETA = i;
+      // Legacy: duplicate Check In Date / Flight No
+      else if (n === 'checkindate') {
         if (!seen.checkindate) {
           map.arrivalCheckInDate = i;
+          map.onwardArrDate = map.onwardArrDate ?? i;
           seen.checkindate = 1;
         } else {
           map.returnCheckInDate = i;
+          map.returnDepDate = map.returnDepDate ?? i;
         }
       } else if (n === 'flightno') {
         if (!seen.flightno) {
-          map.arrivalFlightNo = i;
+          map.arrivalFlightNo = map.arrivalFlightNo ?? i;
           seen.flightno = 1;
         } else {
-          map.returnFlightNo = i;
+          map.returnFlightNo = map.returnFlightNo ?? i;
         }
-      } else if (n === 'companyname') map.companyName = i;
+      } else if (n === 'eta') {
+        map.onwardETA = map.onwardETA ?? i;
+      } else if (n === 'checkoutdate') {
+        map.checkOutDate = i;
+        map.returnDepDate = map.returnDepDate ?? i;
+      } else if (n === 'etd') {
+        map.returnETD = map.returnETD ?? i;
+      }
+      // Common
+      else if (n === 'companyname') map.companyName = i;
       else if (n === 'salutation') map.salutation = i;
       else if (n === 'firstname') map.firstName = i;
       else if (n === 'lastname') map.lastName = i;
@@ -405,9 +434,6 @@ class GoogleSheetsSyncService {
       else if (n === 'passportno' || n === 'passportnumber') map.passportNumber = i;
       else if (n === 'contactno') map.contactNo = i;
       else if (n === 'email') map.email = i;
-      else if (n === 'eta') map.eta = i;
-      else if (n === 'checkoutdate') map.checkOutDate = i;
-      else if (n === 'etd') map.etd = i;
     }
     return map;
   }
@@ -465,18 +491,25 @@ class GoogleSheetsSyncService {
     };
 
     const companyName = get('companyName');
+    const salutation = get('salutation');
     const firstName = get('firstName');
     const lastName = get('lastName');
     const nameAsPerPassport = get('nameAsPerPassport');
     const passportNumber = get('passportNumber');
     const contactNo = get('contactNo');
     const email = get('email');
-    const arrivalCheckInDate = get('arrivalCheckInDate');
+    // New format: Onward Flight Arr. Date + ETA (when flight lands = pickup time)
+    const onwardArrDate = get('onwardArrDate') || get('arrivalCheckInDate');
+    const onwardETA = get('onwardETA') || get('eta');
     const arrivalFlightNo = get('arrivalFlightNo');
-    const eta = get('eta');
-    const checkOutDate = get('checkOutDate');
+    const onwardDepAirport = get('onwardDepAirport');
+    const onwardArrAirport = get('onwardArrAirport');
+    // New format: Return Flight Dep. Date + ETD (when flight departs)
+    const returnDepDate = get('returnDepDate') || get('checkOutDate');
+    const returnETD = get('returnETD') || get('etd');
     const returnFlightNo = get('returnFlightNo');
-    const etd = get('etd');
+    const returnDepAirport = get('returnDepAirport');
+    const returnArrAirport = get('returnArrAirport');
 
     const name = [firstName, lastName].filter(Boolean).join(' ') || nameAsPerPassport || email?.split('@')[0] || '';
 
@@ -484,16 +517,17 @@ class GoogleSheetsSyncService {
       return { valid: false, error: 'Missing required field: Email' };
     }
 
-    // Skip #ERROR! and invalid phone
+    // Skip #ERROR! and invalid phone. Supports (44)7939336353, (49)1732742690, (91)9940158505
     const phone = contactNo && !String(contactNo).includes('#ERROR') ? contactNo : '';
 
-    const arrivalTime = this.parseTransferSyncDateTime(arrivalCheckInDate, eta);
-    const departureTime = this.parseTransferSyncDateTime(checkOutDate, etd);
+    const arrivalTime = this.parseTransferSyncDateTime(onwardArrDate, onwardETA);
+    const departureTime = this.parseTransferSyncDateTime(returnDepDate, returnETD);
 
     const primary = {
       name: name || email,
       email: email.toLowerCase(),
       phone,
+      salutation: salutation || undefined,
       job_position: '',
       company_name: companyName || '',
       whatsapp_number: '',
@@ -505,7 +539,12 @@ class GoogleSheetsSyncService {
       arrival_flight_no: arrivalFlightNo || 'XX000',
       arrival_time: arrivalTime,
       departure_flight_no: returnFlightNo || arrivalFlightNo || 'XX000',
-      departure_time: departureTime || arrivalTime
+      departure_time: departureTime || arrivalTime,
+      // Airport codes from sheet (for demo when flight API has ±3 day limit)
+      onward_dep_airport: this.toIataCode(onwardDepAirport),
+      onward_arr_airport: this.toIataCode(onwardArrAirport),
+      return_dep_airport: this.toIataCode(returnDepAirport),
+      return_arr_airport: this.toIataCode(returnArrAirport)
     };
 
     return {
@@ -515,6 +554,18 @@ class GoogleSheetsSyncService {
         delegate2: { present: false }
       }
     };
+  }
+
+  /**
+   * Extract 3-char IATA code from sheet value. Expects "KUL", "LHR" etc.
+   * If value is 3 letters, use it. Otherwise try to find a 3-char code in the string.
+   */
+  toIataCode(val) {
+    if (!val || typeof val !== 'string') return null;
+    const s = val.trim().toUpperCase();
+    if (s.length === 3 && /^[A-Z]{3}$/.test(s)) return s;
+    const match = s.match(/\b([A-Z]{3})\b/);
+    return match ? match[1] : null;
   }
 
   /**
@@ -1239,6 +1290,7 @@ class GoogleSheetsSyncService {
           // Build customer_details
           const customer_details = {
             name: primary.name,
+            salutation: primary.salutation || undefined,
             email: primary.email,
             contact_number: this.normalizePhoneToE164(primary.phone),
             no_of_passengers: delegate2.present ? 2 : 1,
@@ -1258,23 +1310,29 @@ class GoogleSheetsSyncService {
           const onward_arrival_time = primary.arrival_time || nowIso;
           const return_departure_time = primary.departure_time || nowIso;
 
+          // Onward Arr. Airport and Return Dep. Airport = KUL for everyone
+          const onwardDepAirport = primary.onward_dep_airport || 'TBD';
+          const onwardArrAirport = 'KUL';
+          const returnDepAirport = 'KUL';
+          const returnArrAirport = primary.return_arr_airport || 'TBD';
+
           const flight_details = {
             flight_no: (primary.arrival_flight_no || primary.departure_flight_no || 'XX000')
               .toUpperCase()
               .slice(0, 10),
             airline: 'TBD',
-            departure_airport: 'TBD',
-            arrival_airport: 'TBD',
+            departure_airport: onwardDepAirport,
+            arrival_airport: onwardArrAirport,
             departure_time: onward_arrival_time,
             arrival_time: onward_arrival_time,
             status: 'on_time',
             delay_minutes: 0
           };
 
-          // Transfer details – pickup when flight lands at airport
+          // Transfer details – pickup at Kuala Lumpur International Airport (hardcoded for all)
           const estimated_pickup_time = onward_arrival_time;
           const transfer_details = {
-            pickup_location: 'Airport (TBD)',
+            pickup_location: 'Kuala Lumpur International Airport (KUL)',
             drop_location: 'Grand Hyatt',
             event_place: 'Event (TBD)',
             estimated_pickup_time,
@@ -1345,8 +1403,8 @@ class GoogleSheetsSyncService {
           const return_flight_details = {
             flight_no: (primary.departure_flight_no || primary.arrival_flight_no || 'XX000').toUpperCase().slice(0, 10),
             airline: 'TBD',
-            departure_airport: 'TBD',
-            arrival_airport: 'TBD',
+            departure_airport: returnDepAirport,
+            arrival_airport: returnArrAirport,
             departure_time: returnDepartureTime,
             arrival_time: returnArrivalTime,
             status: 'on_time',
@@ -1379,13 +1437,20 @@ class GoogleSheetsSyncService {
               delegates[0].flight_details = enrichedTraveler;
               traveler_flight_details = enrichedTraveler;
             }
+            // Enforce KUL for onward arrival and return departure
+            flight_details.arrival_airport = 'KUL';
+            return_flight_details.departure_airport = 'KUL';
 
-            // Update pickup/drop from enriched airport data (replaces "Airport (TBD)")
+            // Update pickup/drop from airport – KUL uses specific label
             if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
-              transfer_details.pickup_location = formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
+              transfer_details.pickup_location = flight_details.arrival_airport === 'KUL'
+                ? 'Kuala Lumpur International Airport (KUL)'
+                : formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
             }
             if (return_flight_details.departure_airport && return_flight_details.departure_airport !== 'TBD') {
-              return_transfer_details.drop_location = formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
+              return_transfer_details.drop_location = return_flight_details.departure_airport === 'KUL'
+                ? 'Kuala Lumpur International Airport (KUL)'
+                : formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
             }
           } catch (e) {
             console.warn(`[TransferSync] Row ${rowNum} flight enrichment failed:`, e.message, '– continuing with TBD');

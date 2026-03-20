@@ -101,7 +101,7 @@ const createTransferSchema = Joi.object({
         'string.min': 'Customer name must be at least 2 characters long',
         'string.max': 'Customer name cannot exceed 100 characters'
       }),
-    
+    salutation: Joi.string().trim().max(20).allow('', null),
     contact_number: commonSchemas.phoneNumber,
     email: commonSchemas.email,
     

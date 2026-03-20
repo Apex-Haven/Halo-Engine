@@ -40,6 +40,7 @@ const userSchema = new mongoose.Schema({
     default: 'CUSTOMER'
   },
   profile: {
+    salutation: { type: String, trim: true, maxlength: 20 },
     firstName: {
       type: String,
       required: true,

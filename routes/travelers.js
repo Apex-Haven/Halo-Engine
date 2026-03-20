@@ -83,6 +83,7 @@ router.get('/export', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']
 
     // Prepare data for Excel
     const excelData = travelers.map(traveler => ({
+      'Salutation': traveler.profile?.salutation || '',
       'First Name': traveler.profile?.firstName || '',
       'Last Name': traveler.profile?.lastName || '',
       'Email': traveler.email || '',
@@ -103,6 +104,7 @@ router.get('/export', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']
 
     // Set column widths
     const columnWidths = [
+      { wch: 10 }, // Salutation
       { wch: 15 }, // First Name
       { wch: 15 }, // Last Name
       { wch: 30 }, // Email
@@ -227,6 +229,7 @@ router.post('/', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), as
       password,
       role: 'TRAVELER',
       profile: {
+        salutation: profile.salutation || '',
         firstName: profile.firstName,
         lastName: profile.lastName,
         phone: profile.phone || '',
@@ -318,6 +321,7 @@ router.put('/:id', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), 
     if (username) updateData.username = username;
     if (email) updateData.email = email;
     if (profile) {
+      if (profile.salutation !== undefined) updateData['profile.salutation'] = profile.salutation || '';
       updateData['profile.firstName'] = profile.firstName;
       updateData['profile.lastName'] = profile.lastName;
       if (profile.phone !== undefined) updateData['profile.phone'] = profile.phone;

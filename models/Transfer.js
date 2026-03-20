@@ -39,6 +39,11 @@ const customerDetailsSchema = new mongoose.Schema({
     trim: true,
     maxlength: 100
   },
+  salutation: {
+    type: String,
+    trim: true,
+    maxlength: 20
+  },
   contact_number: {
     type: String,
     required: true,
