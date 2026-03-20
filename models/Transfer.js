@@ -7,6 +7,7 @@ const auditLogSchema = new mongoose.Schema({
     enum: [
       'created',
       'updated',
+      'vendor_assigned',
       'driver_assigned',
       'driver_updated',
       'status_changed',
