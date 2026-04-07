@@ -143,7 +143,7 @@ const createTransferSchema = Joi.object({
     departure_airport: commonSchemas.airportCode,
     arrival_airport: commonSchemas.airportCode,
     
-    departure_time: commonSchemas.dateTime,
+    departure_time: commonSchemas.dateTime.allow(null).optional(),
     arrival_time: commonSchemas.dateTime,
     
     status: Joi.string()

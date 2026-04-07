@@ -70,8 +70,13 @@ function isRealFlightNumber(fn) {
 function mapFlightStatsToTransfer(fs, opts = {}) {
   if (!fs) return null;
   const { keepTimesFromInput } = opts;
-  const depTime = !keepTimesFromInput && fs.departureTime ? new Date(fs.departureTime) : null;
-  const arrTime = !keepTimesFromInput && fs.arrivalTime ? new Date(fs.arrivalTime) : null;
+  // Departure at origin: always take from FlightStats when present — distinct per flight.
+  // Arrival: when keepTimesFromInput (e.g. route from "today" fallback for a far future date),
+  // keep sheet/API input arrival on the merge step, not the tracker sample day.
+  const depTime = fs.departureTime ? new Date(fs.departureTime) : null;
+  const arrTime = keepTimesFromInput
+    ? null
+    : (fs.arrivalTime ? new Date(fs.arrivalTime) : null);
   const status = FLIGHTSTATS_STATUS_MAP[fs.statusCode] || (fs.isCanceled ? 'cancelled' : fs.isLanded ? 'landed' : 'on_time');
   const airlineFromMap = getAirlineFromFlightNumber(fs.flight);
   return {
@@ -148,8 +153,8 @@ async function enrichFlightDetails(flightDetails, flightDate) {
     arrival_airport: arrAirport,
     departure_airport_name: enriched.departure_airport_name || null,
     arrival_airport_name: enriched.arrival_airport_name || null,
-    departure_time: enriched.departure_time || flightDetails.departure_time,
-    arrival_time: enriched.arrival_time || flightDetails.arrival_time,
+    departure_time: enriched.departure_time != null ? enriched.departure_time : flightDetails.departure_time,
+    arrival_time: enriched.arrival_time != null ? enriched.arrival_time : flightDetails.arrival_time,
     terminal: enriched.terminal || flightDetails.terminal,
     gate: enriched.gate || flightDetails.gate,
     status: enriched.status || flightDetails.status || 'on_time',
@@ -171,4 +176,18 @@ function formatAirportLocation(iata, airportName) {
   return `${iata} Airport`;
 }
 
-module.exports = { enrichFlightDetails, formatAirportLocation };
+/**
+ * Keep transfer pickup times aligned with flight schedules (mutates plain objects or Mongoose subdocs).
+ * Inbound: meet guest when the flight lands → estimated_pickup_time = flight_details.arrival_time.
+ * Return leg: hotel pickup for airport run → estimated_pickup_time = return_flight_details.departure_time.
+ */
+function syncEstimatedPickupTimesFromFlights(transferDetails, flightDetails, returnTransferDetails, returnFlightDetails) {
+  if (transferDetails && flightDetails?.arrival_time) {
+    transferDetails.estimated_pickup_time = flightDetails.arrival_time;
+  }
+  if (returnTransferDetails && returnFlightDetails?.departure_time) {
+    returnTransferDetails.estimated_pickup_time = returnFlightDetails.departure_time;
+  }
+}
+
+module.exports = { enrichFlightDetails, formatAirportLocation, syncEstimatedPickupTimesFromFlights };

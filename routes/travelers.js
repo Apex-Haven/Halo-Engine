@@ -138,6 +138,54 @@ router.get('/export', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']
 });
 
 /**
+ * @route   GET /api/travelers/stats
+ * @desc    Roster size + distinct guest companies (profile.company_name) — CLIENT: own travelers only; admin: all
+ * @access  Private (CLIENT, SUPER_ADMIN, ADMIN)
+ */
+router.get('/stats', authenticate, authorize(['CLIENT', 'SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+  try {
+    const query = { role: 'TRAVELER' };
+    if (req.user.role === 'CLIENT') {
+      query.createdBy = req.user._id;
+    }
+
+    const rosterTravelers = await User.countDocuments(query);
+
+    const guestCoAgg = await User.aggregate([
+      {
+        $match: {
+          ...query,
+          'profile.company_name': { $regex: /\S/ }
+        }
+      },
+      {
+        $group: {
+          _id: { $toLower: { $trim: { input: '$profile.company_name' } } }
+        }
+      },
+      { $match: { _id: { $ne: '' } } },
+      { $count: 'n' }
+    ]);
+    const guestCompanies = guestCoAgg[0]?.n || 0;
+
+    res.json({
+      success: true,
+      data: {
+        rosterTravelers,
+        guestCompanies
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching traveler stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch traveler statistics',
+      error: error.message
+    });
+  }
+});
+
+/**
  * @route   GET /api/travelers/:id
  * @desc    Get single traveler by ID
  * @access  Private (CLIENT role only - can only access their own travelers)

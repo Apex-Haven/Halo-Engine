@@ -109,7 +109,7 @@ const flightDetailsSchema = new mongoose.Schema({
   },
   departure_time: {
     type: Date,
-    required: true
+    required: false
   },
   arrival_time: {
     type: Date,
@@ -302,6 +302,7 @@ const notificationsSchema = new mongoose.Schema({
 }, { _id: false });
 
 const travelerDetailsSchema = new mongoose.Schema({
+  salutation: { type: String, trim: true, maxlength: 20 },
   name: { type: String, trim: true, maxlength: 100 },
   email: { type: String, lowercase: true, trim: true },
   contact_number: { type: String, trim: true },

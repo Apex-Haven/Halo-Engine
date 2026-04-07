@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const Transfer = require('../models/Transfer');
 const flightStatsService = require('../services/flightStatsService');
-const { enrichFlightDetails } = require('../services/flightEnrichmentHelper');
+const { enrichFlightDetails, syncEstimatedPickupTimesFromFlights } = require('../services/flightEnrichmentHelper');
 
 // Import controllers
 const {
@@ -60,6 +60,12 @@ router.post('/verify', authenticate, authorize('SUPER_ADMIN', 'ADMIN', 'OPERATIO
         api_verified: true,
         last_checked: new Date()
       });
+      syncEstimatedPickupTimesFromFlights(
+        transfer.transfer_details,
+        transfer.flight_details,
+        transfer.return_transfer_details,
+        transfer.return_flight_details
+      );
       await transfer.save();
     }
 

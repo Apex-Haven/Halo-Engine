@@ -1,8 +1,10 @@
 const axios = require('axios');
+const moment = require('moment-timezone');
 const User = require('../models/User');
 const Transfer = require('../models/Transfer');
 const bcrypt = require('bcryptjs');
-const { enrichFlightDetails, formatAirportLocation } = require('./flightEnrichmentHelper');
+const { enrichFlightDetails, formatAirportLocation, syncEstimatedPickupTimesFromFlights } = require('./flightEnrichmentHelper');
+const { getTimezoneForIata } = require('./iataTimezones');
 
 /**
  * Google Sheets Sync Service for Travelers and Drivers
@@ -442,39 +444,122 @@ class GoogleSheetsSyncService {
   }
 
   /**
-   * Parse date+time from transfer sync format (e.g. "7/5/2026", "8:25 AM").
-   * Tries DD/MM/YYYY and MM/DD/YYYY.
-   * @param {string} dateStr - Date like "7/5/2026" or "15/05/2026"
-   * @param {string} timeStr - Time like "8:25 AM" or "9:55 PM"
+   * Parse date+time from transfer sync format (e.g. "7/5/2026", "21:00").
+   * Sheet times have no timezone: they are interpreted as **local wall time at the reference airport**
+   * (onward: Onward Dep. Airport, fallback Onward Arr.; return: Return Dep., fallback Return Arr.).
+   * Stored result is UTC (ISO), so the UI can format consistently.
+   *
+   * @param {string} dateStr - Date like "7/5/2026", "2026-05-07", or Sheets serial
+   * @param {string} timeStr - "21:00" (24h), "9:55 PM", etc.
+   * @param {string|null} [airportIata] - 3-letter IATA for timezone (e.g. onward dep airport)
    * @returns {string|null} ISO string or null
    */
-  parseTransferSyncDateTime(dateStr, timeStr) {
-    if (!dateStr || !String(dateStr).trim()) return null;
+  parseTransferSyncDateTime(dateStr, timeStr, airportIata) {
+    if (dateStr == null || !String(dateStr).trim()) return null;
+    const tz = getTimezoneForIata(airportIata);
     const s = String(dateStr).trim();
-    let d = new Date(s);
-    if (Number.isNaN(d.getTime())) {
+
+    let y;
+    let month;
+    let day;
+
+    const num = Number(s);
+    if (!Number.isNaN(num) && num > 20000 && num < 80000) {
+      const dSerial = new Date((num - 25569) * 86400 * 1000);
+      if (!Number.isNaN(dSerial.getTime())) {
+        y = dSerial.getUTCFullYear();
+        month = dSerial.getUTCMonth() + 1;
+        day = dSerial.getUTCDate();
+      }
+    }
+
+    const isoYmd = !y && s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (!y && isoYmd) {
+      y = parseInt(isoYmd[1], 10);
+      month = parseInt(isoYmd[2], 10);
+      day = parseInt(isoYmd[3], 10);
+    }
+
+    // Google Sheets often exports dates as "6-May-26" / "06-May-2026" — numeric split below fails on "May".
+    if (!y) {
+      const flex = moment(
+        s,
+        [
+          'D-MMM-YY',
+          'DD-MMM-YY',
+          'D-MMM-YYYY',
+          'DD-MMM-YYYY',
+          'D MMM YY',
+          'DD MMM YY',
+          'D MMM YYYY',
+          'DD MMM YYYY'
+        ],
+        true
+      );
+      if (flex.isValid()) {
+        y = flex.year();
+        month = flex.month() + 1;
+        day = flex.date();
+      }
+    }
+
+    if (!y) {
       const parts = s.split(/[/-]/);
       if (parts.length >= 3) {
         const [a, b, c] = parts.map((p) => parseInt(p, 10));
-        if (a > 12) d = new Date(c, b - 1, a);
-        else if (b > 12) d = new Date(c, a - 1, b);
-        else d = new Date(c, b - 1, a);
+        if ([a, b, c].some((n) => Number.isNaN(n))) {
+          return null;
+        }
+        if (a > 12) {
+          day = a;
+          month = b;
+          y = c;
+        } else if (b > 12) {
+          month = a;
+          day = b;
+          y = c;
+        } else {
+          month = b;
+          day = a;
+          y = c;
+        }
+      } else {
+        const d = new Date(s);
+        if (Number.isNaN(d.getTime())) return null;
+        y = d.getFullYear();
+        month = d.getMonth() + 1;
+        day = d.getDate();
       }
     }
-    if (Number.isNaN(d.getTime())) return null;
+
+    let hour = 0;
+    let minute = 0;
     if (timeStr && String(timeStr).trim()) {
       const t = String(timeStr).trim();
-      const match = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-      if (match) {
-        let h = parseInt(match[1], 10);
-        const m = parseInt(match[2], 10);
-        const ampm = (match[3] || '').toUpperCase();
+      const m12 = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\s*$/i);
+      // 24h "21:00" must not be parsed as 12h; try 24h if no AM/PM match
+      const m24 = !m12 ? t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/) : null;
+      if (m12) {
+        let h = parseInt(m12[1], 10);
+        const mins = parseInt(m12[2], 10);
+        const ampm = m12[3].toUpperCase();
         if (ampm === 'PM' && h < 12) h += 12;
         if (ampm === 'AM' && h === 12) h = 0;
-        d.setHours(h, m, 0, 0);
+        hour = h;
+        minute = mins;
+      } else if (m24) {
+        hour = parseInt(m24[1], 10);
+        minute = parseInt(m24[2], 10);
+        if (hour > 23 || minute > 59) return null;
       }
     }
-    return d.toISOString();
+
+    const m = moment.tz(
+      { year: y, month: month - 1, day, hour, minute, second: 0, millisecond: 0 },
+      tz
+    );
+    if (!m.isValid()) return null;
+    return m.toISOString();
   }
 
   /**
@@ -501,9 +586,9 @@ class GoogleSheetsSyncService {
     const passportNumber = get('passportNumber');
     const contactNo = get('contactNo');
     const email = get('email');
-    // New format: Onward Flight Arr. Date + ETA (when flight lands = pickup time)
-    const onwardArrDate = get('onwardArrDate') || get('arrivalCheckInDate');
-    const onwardETA = get('onwardETA') || get('eta');
+    // Onward arrival date/time (landing at KUL). Prefer Arr.* columns; fall back to Dep.* if that’s how the sheet is laid out.
+    const onwardArrDate = get('onwardArrDate') || get('arrivalCheckInDate') || get('onwardDepDate');
+    const onwardETA = get('onwardETA') || get('eta') || get('onwardETD');
     const arrivalFlightNo = get('arrivalFlightNo');
     const onwardDepAirport = get('onwardDepAirport');
     const onwardArrAirport = get('onwardArrAirport');
@@ -523,8 +608,20 @@ class GoogleSheetsSyncService {
     // Skip #ERROR! and invalid phone. Supports (44)7939336353, (49)1732742690, (91)9940158505
     const phone = contactNo && !String(contactNo).includes('#ERROR') ? contactNo : '';
 
-    const arrivalTime = this.parseTransferSyncDateTime(onwardArrDate, onwardETA);
-    const departureTime = this.parseTransferSyncDateTime(returnDepDate, returnETD);
+    // Wall-clock times from the sheet → interpret in airport local TZ (no UTC in CSV)
+    const onwardTimeAirport = this.toIataCode(onwardDepAirport) || this.toIataCode(onwardArrAirport);
+    const returnTimeAirport =
+      this.toIataCode(returnDepAirport) || this.toIataCode(returnArrAirport) || onwardTimeAirport;
+    const arrivalTime = this.parseTransferSyncDateTime(onwardArrDate, onwardETA, onwardTimeAirport);
+    const departureTime = this.parseTransferSyncDateTime(returnDepDate, returnETD, returnTimeAirport);
+
+    if (!arrivalTime) {
+      return {
+        valid: false,
+        error:
+          'Missing or unparseable Onward flight arrival date/time. Set Onward Arr. Date and ETA (time). Examples: 06/05/2026 + 06:29, 2026-05-06 + 06:29, or 6-May-2026 + 06:29.'
+      };
+    }
 
     const primary = {
       name: name || email,
@@ -1232,10 +1329,247 @@ class GoogleSheetsSyncService {
   }
 
   /**
+   * Rows with the **same full inbound + return itinerary** (same car) merge into one transfer with delegates.
+   * Must include **return** leg in the key: merged transfers only store row-1 flight data, so rows that share
+   * the same inbound but differ on return must **not** merge (each row keeps its own return times).
+   * Skipped for placeholder flights or missing inbound times.
+   */
+  buildTransferSyncGroupKey(primary) {
+    const raw = (primary.arrival_flight_no || '').toString().trim().toUpperCase();
+    const placeholderFlights = ['', 'XX000', 'TBD', 'N/A'];
+    if (!raw || placeholderFlights.includes(raw)) return null;
+    const t = primary.arrival_time;
+    if (!t) return null;
+    const d = new Date(t);
+    if (Number.isNaN(d.getTime())) return null;
+    const minuteBucket = Math.floor(d.getTime() / 60000);
+
+    const retFlightRaw = (primary.departure_flight_no || '').toString().trim().toUpperCase();
+    const retFlightPart = !retFlightRaw || placeholderFlights.includes(retFlightRaw) ? '—' : retFlightRaw;
+
+    let returnMinutePart = '—';
+    const rt = primary.departure_time;
+    if (rt) {
+      const rd = new Date(rt);
+      if (!Number.isNaN(rd.getTime())) {
+        returnMinutePart = String(Math.floor(rd.getTime() / 60000));
+      }
+    }
+
+    return `${raw}|${minuteBucket}|${retFlightPart}|${returnMinutePart}`;
+  }
+
+  /**
+   * One transfer for multiple sheet rows sharing the same itinerary (see buildTransferSyncGroupKey).
+   * Booker / primary contact is the first row by row number; others become delegates with the same flights.
+   */
+  async _createMergedRegistrationTransfer(group, results, customerId) {
+    group.sort((a, b) => a.rowNum - b.rowNum);
+    const primary = group[0].data.primary;
+    const rowNum = group[0].rowNum;
+    const rowsLabel = group.map((g) => g.rowNum).join(', ');
+
+    const delegatePayload = (p) => ({
+      name: p.name,
+      salutation: p.salutation,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      email: p.email,
+      phone: p.phone,
+      job_position: p.job_position,
+      company_name: p.company_name,
+      consent_email: p.consent_email,
+      consent_whatsapp: p.consent_whatsapp,
+      whatsapp_number: p.whatsapp_number
+    });
+
+    const tr0 = await this.createOrFindTravelerFromDelegate(delegatePayload(primary), customerId);
+    if (!tr0.user) {
+      results.errors.push({
+        row: rowNum,
+        email: primary.email,
+        error: 'Merged rows: could not create primary traveler — will try per-row sync'
+      });
+      return false;
+    }
+    if (tr0.created) results.createdTravelers += 1;
+    const primaryTravelerId = tr0.user._id;
+
+    const delegates = [];
+    for (let i = 1; i < group.length; i++) {
+      const p = group[i].data.primary;
+      const rn = group[i].rowNum;
+      // eslint-disable-next-line no-await-in-loop
+      const tr = await this.createOrFindTravelerFromDelegate(delegatePayload(p), customerId);
+      if (!tr.user) {
+        results.errors.push({
+          row: rn,
+          email: p.email,
+          error: 'Merged group: could not create traveler — will try per-row sync'
+        });
+        return false;
+      }
+      if (tr.created) results.createdTravelers += 1;
+      delegates.push({
+        traveler_id: tr.user._id,
+        flight_same_as_primary: true,
+        flight_details: null
+      });
+    }
+
+    const customer_details = {
+      name: primary.name,
+      salutation: primary.salutation || undefined,
+      email: primary.email,
+      contact_number: this.normalizePhoneToE164(primary.phone),
+      no_of_passengers: 1 + delegates.length,
+      luggage_count: 0,
+      job_position: primary.job_position || undefined,
+      company_name: primary.company_name || undefined,
+      consent_email: primary.consent_email || undefined,
+      consent_whatsapp: primary.consent_whatsapp || undefined,
+      whatsapp_number: primary.whatsapp_number || undefined,
+      flight_booked: primary.flight_booked || undefined,
+      name_as_per_passport: primary.name_as_per_passport || undefined,
+      passport_number: primary.passport_number || undefined
+    };
+
+    if (!primary.arrival_time) {
+      results.errors.push({
+        row: rowNum,
+        email: primary.email,
+        error:
+          'Merged transfer: missing onward arrival time (cannot create transfer without a parsed arrival date/time).'
+      });
+      return false;
+    }
+    const onward_arrival_time = primary.arrival_time;
+    const return_departure_time = primary.departure_time || onward_arrival_time;
+    const onwardDepAirport = primary.onward_dep_airport || 'TBD';
+    const onwardArrAirport = 'KUL';
+    const returnDepAirport = 'KUL';
+    const returnArrAirport = primary.return_arr_airport || 'TBD';
+
+    const flight_details = {
+      flight_no: (primary.arrival_flight_no || primary.departure_flight_no || 'XX000').toUpperCase().slice(0, 10),
+      airline: 'TBD',
+      departure_airport: onwardDepAirport,
+      arrival_airport: onwardArrAirport,
+      // Inbound: sheet time is landing at KUL — do not copy into departure_time (origin dep comes from FlightStats).
+      arrival_time: onward_arrival_time,
+      status: 'on_time',
+      delay_minutes: 0
+    };
+
+    const estimated_pickup_time = onward_arrival_time;
+    const transfer_details = {
+      pickup_location: 'Kuala Lumpur International Airport (KUL)',
+      drop_location: 'Grand Hyatt',
+      event_place: 'Event (TBD)',
+      estimated_pickup_time,
+      special_notes: ''
+    };
+
+    const returnDepartureTime = return_departure_time;
+    const returnArrivalTime = primary.departure_time
+      ? new Date(new Date(primary.departure_time).getTime() + 2 * 60 * 60 * 1000).toISOString()
+      : returnDepartureTime;
+    const return_flight_details = {
+      flight_no: (primary.departure_flight_no || primary.arrival_flight_no || 'XX000').toUpperCase().slice(0, 10),
+      airline: 'TBD',
+      departure_airport: returnDepAirport,
+      arrival_airport: returnArrAirport,
+      departure_time: returnDepartureTime,
+      arrival_time: returnArrivalTime,
+      status: 'on_time',
+      delay_minutes: 0,
+      gate: '',
+      terminal: ''
+    };
+    const return_transfer_details = {
+      pickup_location: 'Hotel / Event (TBD)',
+      drop_location: 'Grand Hyatt',
+      event_place: 'Event (TBD)',
+      estimated_pickup_time: returnDepartureTime,
+      special_notes: '',
+      transfer_status: 'pending'
+    };
+
+    try {
+      const [enrichedOnward, enrichedReturn] = await Promise.all([
+        enrichFlightDetails(flight_details, onward_arrival_time),
+        enrichFlightDetails(return_flight_details, returnDepartureTime)
+      ]);
+      if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
+      if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
+      flight_details.arrival_airport = 'KUL';
+      return_flight_details.departure_airport = 'KUL';
+      if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
+        transfer_details.pickup_location =
+          flight_details.arrival_airport === 'KUL'
+            ? 'Kuala Lumpur International Airport (KUL)'
+            : formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
+      }
+      if (return_flight_details.departure_airport && return_flight_details.departure_airport !== 'TBD') {
+        return_transfer_details.drop_location =
+          return_flight_details.departure_airport === 'KUL'
+            ? 'Kuala Lumpur International Airport (KUL)'
+            : formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
+      }
+      syncEstimatedPickupTimesFromFlights(transfer_details, flight_details, return_transfer_details, return_flight_details);
+    } catch (e) {
+      console.warn(`[TransferSync] Merged rows ${rowsLabel} flight enrichment failed:`, e.message);
+    }
+
+    const rawName = primary.name || 'Client';
+    const namePart = rawName.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 20) || 'X';
+    let apexId;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const digits = Math.floor(Math.random() * 90000) + 10000;
+      const candidate = `APX${namePart}${digits}`;
+      // eslint-disable-next-line no-await-in-loop
+      const exists = await Transfer.findById(candidate);
+      if (!exists) {
+        apexId = candidate;
+        break;
+      }
+    }
+    if (!apexId) {
+      results.errors.push({
+        row: rowNum,
+        email: primary.email,
+        error: 'Failed to generate unique Apex ID (merged group) — will try per-row sync'
+      });
+      return false;
+    }
+
+    const transfer = new Transfer({
+      _id: apexId,
+      customer_id: customerId,
+      customer_details,
+      flight_details,
+      transfer_details,
+      return_flight_details,
+      return_transfer_details,
+      traveler_id: primaryTravelerId,
+      traveler_details: null,
+      traveler_flight_details: null,
+      delegates
+    });
+
+    await transfer.save();
+    results.createdTransfers += 1;
+    console.log(
+      `[TransferSync] Merged rows ${rowsLabel} → ${transfer._id} (${group.length} travelers, same flight+time)`
+    );
+    return true;
+  }
+
+  /**
    * Sync registration sheet rows into Transfer documents.
    * Uses new transfer sync format: Company Name, First Name, Last Name, Email, Contact No,
    * Check In Date, Flight No, ETA (onward), Check Out Date, Flight No, ETD (return).
-   * One transfer per row; no Delegate 2 in this format.
+   * Rows with the same onward flight + arrival time (minute) merge into one transfer with delegates[].
    *
    * @param {string} sheetId - Google Sheet ID
    * @param {string} sheetName - Unused (kept for API compat); use gid for sheet selection
@@ -1269,6 +1603,7 @@ class GoogleSheetsSyncService {
       console.log('[TransferSync] Column mapping:', JSON.stringify(colMap));
       console.log(`[TransferSync] Processing ${rows.length} rows. Rows with errors will be skipped; rest will be created.`);
 
+      const validItems = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         results.total += 1;
@@ -1289,8 +1624,46 @@ class GoogleSheetsSyncService {
             continue;
           }
 
-          const { primary, delegate2 } = parsed.data;
+          validItems.push({ rowNum, row, data: parsed.data });
+        } catch (error) {
+          results.skipped += 1;
+          const emailIdx = colMap.email;
+          const emailVal = emailIdx != null && row[emailIdx] ? row[emailIdx] : 'N/A';
+          results.errors.push({
+            row: rowNum,
+            email: emailVal,
+            error: error.message
+          });
+          console.error(`[TransferSync] Row ${rowNum} ERROR – ${error.message}. Skipping this row; rest of transfers will still be created.`);
+        }
+      }
 
+      const buckets = new Map();
+      for (const item of validItems) {
+        const key = this.buildTransferSyncGroupKey(item.data.primary);
+        const bucketKey = key != null ? key : `__single_${item.rowNum}`;
+        if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
+        buckets.get(bucketKey).push(item);
+      }
+
+      const mergedRowNums = new Set();
+      for (const [bucketKey, group] of buckets) {
+        if (group.length > 1 && !bucketKey.startsWith('__single_')) {
+          // eslint-disable-next-line no-await-in-loop
+          const ok = await this._createMergedRegistrationTransfer(group, results, customerId);
+          if (ok) {
+            group.forEach((g) => mergedRowNums.add(g.rowNum));
+          }
+        }
+      }
+
+      for (const item of validItems) {
+        if (mergedRowNums.has(item.rowNum)) continue;
+
+        const { rowNum, row } = item;
+        const { primary, delegate2 } = item.data;
+
+        try {
           // Create or find Traveler users for primary and delegate 2
           const primaryTravelerResult = await this.createOrFindTravelerFromDelegate(
             { name: primary.name, salutation: primary.salutation, firstName: primary.firstName, lastName: primary.lastName, email: primary.email, phone: primary.phone, job_position: primary.job_position, company_name: primary.company_name, consent_email: primary.consent_email, consent_whatsapp: primary.consent_whatsapp, whatsapp_number: primary.whatsapp_number },
@@ -1319,10 +1692,10 @@ class GoogleSheetsSyncService {
             passport_number: primary.passport_number || undefined
           };
 
-          // Onward leg: use Arrival Date & Time (when flight lands at airport = pickup time)
-          const nowIso = new Date().toISOString();
-          const onward_arrival_time = primary.arrival_time || nowIso;
-          const return_departure_time = primary.departure_time || nowIso;
+          // Onward leg: use Arrival Date & Time (when flight lands at airport = pickup time).
+          // Rows without a parseable onward arrival are rejected in parseRowToTransferSyncFormat (no fake "sync time").
+          const onward_arrival_time = primary.arrival_time;
+          const return_departure_time = primary.departure_time || onward_arrival_time;
 
           // Onward Arr. Airport and Return Dep. Airport = KUL for everyone
           const onwardDepAirport = primary.onward_dep_airport || 'TBD';
@@ -1337,7 +1710,7 @@ class GoogleSheetsSyncService {
             airline: 'TBD',
             departure_airport: onwardDepAirport,
             arrival_airport: onwardArrAirport,
-            departure_time: onward_arrival_time,
+            // Inbound: sheet ETA = arrival at KUL; origin departure_time filled by FlightStats enrichment.
             arrival_time: onward_arrival_time,
             status: 'on_time',
             delay_minutes: 0
@@ -1466,6 +1839,7 @@ class GoogleSheetsSyncService {
                 ? 'Kuala Lumpur International Airport (KUL)'
                 : formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
             }
+            syncEstimatedPickupTimesFromFlights(transfer_details, flight_details, return_transfer_details, return_flight_details);
           } catch (e) {
             console.warn(`[TransferSync] Row ${rowNum} flight enrichment failed:`, e.message, '– continuing with TBD');
           }

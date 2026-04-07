@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const { sendTemplatedEmail: sendSendGridEmail } = require('../config/sendgrid');
 const { sendNotification, MESSAGE_TEMPLATES } = require('../config/twilio');
 const googleSheetsSyncService = require('../services/googleSheetsSyncService');
-const { enrichFlightDetails } = require('../services/flightEnrichmentHelper');
+const { enrichFlightDetails, syncEstimatedPickupTimesFromFlights } = require('../services/flightEnrichmentHelper');
 const moment = require('moment');
 const {
   notifyAdminsTransferCreated,
@@ -149,6 +149,13 @@ const createTransfer = async (req, res) => {
       }
     }
 
+    syncEstimatedPickupTimesFromFlights(
+      transferData.transfer_details,
+      transferData.flight_details,
+      transferData.return_transfer_details,
+      transferData.return_flight_details
+    );
+
     // Normalize delegates array: ObjectIds and copy primary flight when flight_same_as_primary
     if (Array.isArray(transferData.delegates) && transferData.delegates.length > 0) {
       const primaryFlight = transferData.flight_details;
@@ -186,9 +193,11 @@ const createTransfer = async (req, res) => {
     };
 
     try {
-      // Format dates
-      const departureTime = moment(transfer.flight_details?.departure_time).format('MMMM Do YYYY, h:mm A');
-      const arrivalTime = moment(transfer.flight_details?.arrival_time).format('MMMM Do YYYY, h:mm A');
+      // Format dates (departure may be unset until FlightStats enrichment)
+      const depM = transfer.flight_details?.departure_time ? moment(transfer.flight_details.departure_time) : null;
+      const arrM = transfer.flight_details?.arrival_time ? moment(transfer.flight_details.arrival_time) : null;
+      const departureTime = depM && depM.isValid() ? depM.format('MMMM Do YYYY, h:mm A') : 'TBD';
+      const arrivalTime = arrM && arrM.isValid() ? arrM.format('MMMM Do YYYY, h:mm A') : 'TBD';
       
       // Send email to client
       if (transfer.customer_details?.email) {
@@ -546,6 +555,13 @@ const updateFlightDetails = async (req, res) => {
         ...return_transfer_details
       };
     }
+
+    syncEstimatedPickupTimesFromFlights(
+      transfer.transfer_details,
+      transfer.flight_details,
+      transfer.return_transfer_details,
+      transfer.return_flight_details
+    );
 
     await transfer.save();
 
@@ -1049,7 +1065,7 @@ const getTransferStats = async (req, res) => {
 
     const totalTransfers = await Transfer.countDocuments(baseFilter);
 
-    // Placeholder flights (XX000, TBD, etc.) – exclude from today counts; sync uses nowIso when no date
+    // Placeholder flights (XX000, TBD, etc.) – exclude from today counts
     const placeholderFlights = ['', 'XX000', 'TBD', 'N/A'];
 
     // Arrivals today (onward flight arrival_time) – only real flights, not placeholders
@@ -1098,6 +1114,47 @@ const getTransferStats = async (req, res) => {
       successRate,
       byStatus
     };
+
+    // CLIENT: travelers = Travelers page roster (TRAVELER users you created), not delegate slots on transfers
+    if (req.user && req.user.role === 'CLIENT') {
+      const clientId = req.user._id;
+      const travelerQuery = { role: 'TRAVELER', createdBy: clientId };
+
+      const rosterTravelers = await User.countDocuments(travelerQuery);
+      data.travelers = rosterTravelers;
+      data.rosterTravelers = rosterTravelers;
+
+      // People counted on bookings (1 + delegates per transfer) — matches Transfers status KPI “Travelers” column sum
+      const headcountAgg = await Transfer.aggregate([
+        { $match: baseFilter },
+        {
+          $project: {
+            slots: {
+              $add: [1, { $size: { $ifNull: ['$delegates', []] } }]
+            }
+          }
+        },
+        { $group: { _id: null, sum: { $sum: '$slots' } } }
+      ]);
+      data.travelerSlotsOnTransfers = headcountAgg[0]?.sum ?? 0;
+
+      const guestCoAgg = await User.aggregate([
+        {
+          $match: {
+            ...travelerQuery,
+            'profile.company_name': { $regex: /\S/ }
+          }
+        },
+        {
+          $group: {
+            _id: { $toLower: { $trim: { input: '$profile.company_name' } } }
+          }
+        },
+        { $match: { _id: { $ne: '' } } },
+        { $count: 'n' }
+      ]);
+      data.guestCompanies = guestCoAgg[0]?.n || 0;
+    }
 
     // Active drivers only for admin roles
     if (req.user && !['CLIENT', 'TRAVELER', 'DRIVER'].includes(req.user.role)) {
@@ -1263,6 +1320,13 @@ const updateClientDetails = async (req, res) => {
       by: `user:${userId}`,
       details: 'Client updated transfer details (flight info, passengers, notes)'
     });
+
+    syncEstimatedPickupTimesFromFlights(
+      transfer.transfer_details,
+      transfer.flight_details,
+      transfer.return_transfer_details,
+      transfer.return_flight_details
+    );
 
     await transfer.save();
 
