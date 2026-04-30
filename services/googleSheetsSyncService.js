@@ -1338,6 +1338,8 @@ class GoogleSheetsSyncService {
     const raw = (primary.arrival_flight_no || '').toString().trim().toUpperCase();
     const placeholderFlights = ['', 'XX000', 'TBD', 'N/A'];
     if (!raw || placeholderFlights.includes(raw)) return null;
+    const company = (primary.company_name || '').toString().trim().replace(/\s+/g, ' ').toLowerCase();
+    if (!company) return null;
     const t = primary.arrival_time;
     if (!t) return null;
     const d = new Date(t);
@@ -1356,7 +1358,7 @@ class GoogleSheetsSyncService {
       }
     }
 
-    return `${raw}|${minuteBucket}|${retFlightPart}|${returnMinutePart}`;
+    return `${company}|${raw}|${minuteBucket}|${retFlightPart}|${returnMinutePart}`;
   }
 
   /**
@@ -1647,12 +1649,16 @@ class GoogleSheetsSyncService {
       }
 
       const mergedRowNums = new Set();
+      const maxTravelersPerTransfer = 3;
       for (const [bucketKey, group] of buckets) {
         if (group.length > 1 && !bucketKey.startsWith('__single_')) {
-          // eslint-disable-next-line no-await-in-loop
-          const ok = await this._createMergedRegistrationTransfer(group, results, customerId);
-          if (ok) {
-            group.forEach((g) => mergedRowNums.add(g.rowNum));
+          for (let i = 0; i < group.length; i += maxTravelersPerTransfer) {
+            const chunk = group.slice(i, i + maxTravelersPerTransfer);
+            // eslint-disable-next-line no-await-in-loop
+            const ok = await this._createMergedRegistrationTransfer(chunk, results, customerId);
+            if (ok) {
+              chunk.forEach((g) => mergedRowNums.add(g.rowNum));
+            }
           }
         }
       }
