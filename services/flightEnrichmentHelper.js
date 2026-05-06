@@ -103,13 +103,19 @@ function mapFlightStatsToTransfer(fs, opts = {}) {
  *
  * @param {Object} flightDetails - Existing flight_details (must have flight_no)
  * @param {Date|string} [flightDate] - Optional date for API (default: arrival_time or departure_time)
+ * @param {Object} [opts]
+ * @param {boolean} [opts.keepSheetTimes] - When true, FlightStats NEVER overwrites arrival_time or
+ *   departure_time that were already set from the sheet. Only metadata (airline, airports, terminal,
+ *   gate, status) is taken from the API. Use this for all sheet-sync paths so the operator-entered
+ *   times are always authoritative.
  * @returns {Promise<Object|null>} Merged flight_details or null if no enrichment
  */
-async function enrichFlightDetails(flightDetails, flightDate) {
+async function enrichFlightDetails(flightDetails, flightDate, opts = {}) {
   if (!flightDetails?.flight_no || !isRealFlightNumber(flightDetails.flight_no)) {
     return null;
   }
 
+  const { keepSheetTimes = false } = opts;
   const fd = flightDate || flightDetails.arrival_time || flightDetails.departure_time;
   let enriched = null;
 
@@ -119,10 +125,12 @@ async function enrichFlightDetails(flightDetails, flightDate) {
     const fsData = await flightStatsService.getFlightData(flightDetails.flight_no, fd, { fallbackToToday: true });
     if (fsData) {
       enriched = mapFlightStatsToTransfer(fsData, {
-        keepTimesFromInput: fsData.routeFromFallbackDate
+        // keepTimesFromInput already suppresses arrival_time when routeFromFallbackDate;
+        // keepSheetTimes is a stronger override that also suppresses departure_time.
+        keepTimesFromInput: fsData.routeFromFallbackDate || keepSheetTimes
       });
       if (enriched) {
-        const suffix = enriched.route_from_fallback_date ? ' (route from fallback date)' : '';
+        const suffix = enriched.route_from_fallback_date ? ' (route from fallback date)' : (keepSheetTimes ? ' (sheet times kept)' : '');
         console.log(`[FlightEnrichment] ✓ ${flightDetails.flight_no} (${dateForLog}): ${enriched.departure_airport}→${enriched.arrival_airport} ${enriched.airline}${suffix}`);
       }
     }
@@ -146,6 +154,19 @@ async function enrichFlightDetails(flightDetails, flightDate) {
   const depAirport = (enriched.departure_airport || flightDetails.departure_airport || 'TBD').toString().toUpperCase().slice(0, 3);
   const arrAirport = (enriched.arrival_airport || flightDetails.arrival_airport || 'TBD').toString().toUpperCase().slice(0, 3);
   const resolvedAirline = (enriched.airline && enriched.airline !== 'TBD') ? enriched.airline : (fallbackAirline || flightDetails.airline || 'TBD');
+
+  // When keepSheetTimes is set, sheet-provided times are authoritative — never let FlightStats
+  // overwrite them. FlightStats still supplies the origin departure_time for the onward leg
+  // (not available in the sheet), but we only take it when the sheet didn't already have one.
+  const resolvedArrivalTime = keepSheetTimes
+    ? flightDetails.arrival_time   // always keep sheet value
+    : (enriched.arrival_time != null ? enriched.arrival_time : flightDetails.arrival_time);
+  const resolvedDepartureTime = keepSheetTimes
+    ? (flightDetails.departure_time != null
+        ? flightDetails.departure_time          // sheet had a dep time → keep it
+        : enriched.departure_time)              // sheet had no dep time → take from API (onward origin dep)
+    : (enriched.departure_time != null ? enriched.departure_time : flightDetails.departure_time);
+
   return {
     ...flightDetails,
     airline: resolvedAirline,
@@ -153,8 +174,8 @@ async function enrichFlightDetails(flightDetails, flightDate) {
     arrival_airport: arrAirport,
     departure_airport_name: enriched.departure_airport_name || null,
     arrival_airport_name: enriched.arrival_airport_name || null,
-    departure_time: enriched.departure_time != null ? enriched.departure_time : flightDetails.departure_time,
-    arrival_time: enriched.arrival_time != null ? enriched.arrival_time : flightDetails.arrival_time,
+    departure_time: resolvedDepartureTime,
+    arrival_time: resolvedArrivalTime,
     terminal: enriched.terminal || flightDetails.terminal,
     gate: enriched.gate || flightDetails.gate,
     status: enriched.status || flightDetails.status || 'on_time',

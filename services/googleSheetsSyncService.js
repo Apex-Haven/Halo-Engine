@@ -1597,10 +1597,13 @@ class GoogleSheetsSyncService {
     }
 
     try {
-      const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time);
+      // keepSheetTimes: sheet-provided arrival/departure times are authoritative.
+      // FlightStats may only supply metadata (airline, terminal, gate, status) and the
+      // origin departure_time for the onward leg (which the sheet does not contain).
+      const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time, { keepSheetTimes: true });
       if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
       if (hasReturnLeg && return_flight_details) {
-        const enrichedReturn = await enrichFlightDetails(return_flight_details, primary.departure_time);
+        const enrichedReturn = await enrichFlightDetails(return_flight_details, primary.departure_time, { keepSheetTimes: true });
         if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
       }
       flight_details.arrival_airport = 'KUL';
@@ -1936,15 +1939,15 @@ class GoogleSheetsSyncService {
             console.log(
               `[TransferSync] Row ${rowNum} (${primary.email}): enriching flights – onward ${flight_details.flight_no} (${onward_arrival_time?.slice?.(0, 10) || 'N/A'}), return ${retLabel}`
             );
-            const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time);
+            const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time, { keepSheetTimes: true });
             if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
             if (hasReturnLeg && return_flight_details && return_departure_time) {
-              const enrichedReturn = await enrichFlightDetails(return_flight_details, return_departure_time);
+              const enrichedReturn = await enrichFlightDetails(return_flight_details, return_departure_time, { keepSheetTimes: true });
               if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
             }
             const enrichedTraveler =
               traveler_flight_details && traveler_flight_details.flight_no !== flight_details?.flight_no
-                ? await enrichFlightDetails(traveler_flight_details, traveler_flight_details.arrival_time)
+                ? await enrichFlightDetails(traveler_flight_details, traveler_flight_details.arrival_time, { keepSheetTimes: true })
                 : null;
             if (enrichedTraveler && delegates.length > 0) {
               delegates[0].flight_details = enrichedTraveler;
