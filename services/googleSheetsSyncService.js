@@ -16,6 +16,54 @@ class GoogleSheetsSyncService {
   }
 
   /**
+   * True when a sheet cell is intentionally blank / unknown (e.g. "-" for no return leg or no email).
+   * Accepts common dash and N/A variants from Excel/Sheets.
+   *
+   * @param {unknown} val - Raw cell value
+   * @returns {boolean}
+   */
+  isSheetEmptyPlaceholder(val) {
+    if (val == null) return true;
+    const s = String(val).trim().toLowerCase();
+    if (s === '') return true;
+    // Exact tokens
+    if (['-', '—', '–', 'n/a', 'na', 'none', 'nil', 'tbd'].includes(s)) return true;
+    // Phrases like "No Airport Transfer", "No Return Transfer", "No Transfer"
+    if (/^no\s/.test(s)) return true;
+    return false;
+  }
+
+  /**
+   * Placeholder email for registration/transfer sync when Email is "-" or empty.
+   * Deterministic per client + sheet row so re-sync updates the same traveler.
+   *
+   * @param {{ customerId?: import('mongoose').Types.ObjectId|string, rowNum?: number }} syncContext
+   * @returns {string}
+   */
+  buildSyntheticRegistrationEmail(syncContext = {}) {
+    const cid =
+      syncContext.customerId != null
+        ? String(syncContext.customerId).replace(/[^a-f0-9]/gi, '')
+        : 'na';
+    const rid = syncContext.rowNum != null ? syncContext.rowNum : Math.floor(Math.random() * 1e9);
+    return `noemail.c${cid}.r${rid}@sheet-sync.local`;
+  }
+
+  /**
+   * Placeholder email for traveler list sync when Email is "-" or empty.
+   *
+   * @param {import('mongoose').Types.ObjectId|string|undefined} syncUserId
+   * @param {number|undefined} rowNum - 1-based row index in sheet data
+   * @returns {string}
+   */
+  buildSyntheticTravelerListEmail(syncUserId, rowNum) {
+    const uid =
+      syncUserId != null ? String(syncUserId).replace(/[^a-f0-9]/gi, '') : 'na';
+    const rid = rowNum != null ? rowNum : Math.floor(Math.random() * 1e9);
+    return `noemail.u${uid}.r${rid}@sheet-sync.local`;
+  }
+
+  /**
    * Fetch data from Google Sheets
    * @param {string} sheetId - Google Sheet ID (from URL)
    * @param {string} sheetName - Optional sheet name (default: first sheet)
@@ -241,9 +289,10 @@ class GoogleSheetsSyncService {
    * Parse sheet row to traveler data
    * @param {Object} row - Row from Google Sheet
    * @param {Object} columnMap - Map of normalized column names to indices
+   * @param {{ rowNum?: number, syncUserId?: import('mongoose').Types.ObjectId|string }} [syncContext]
    * @returns {Object} Traveler data object
    */
-  parseRowToTraveler(row, columnMap) {
+  parseRowToTraveler(row, columnMap, syncContext = {}) {
     const getValue = (normalizedKey) => {
       // Get the actual header name from the map
       const actualHeaderName = columnMap[normalizedKey];
@@ -273,27 +322,34 @@ class GoogleSheetsSyncService {
       }
     }
     const salutation = getValue('salutation');
-    const email = getValue('email');
+    let email = getValue('email');
+    if (this.isSheetEmptyPlaceholder(email)) {
+      email = null;
+    }
     const phone = getValue('phone');
     const client = getValue('client');
     const username = getValue('username');
     const password = getValue('password');
 
-    // Validate required fields (need at least first name, last name, and email)
-    if (!firstName || !lastName || !email) {
+    // Validate required fields (need at least first name and last name; email may be "-" → synthetic)
+    if (!firstName || !lastName) {
       return {
         valid: false,
-        error: 'Missing required fields: FirstName, LastName, or Email (or use columns: Full Name and Email Address / Email ID)'
+        error: 'Missing required fields: First Name and Last Name (or Full Name column)'
       };
     }
 
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return {
-        valid: false,
-        error: `Invalid email format: ${email}`
-      };
+    if (!email) {
+      email = this.buildSyntheticTravelerListEmail(syncContext.syncUserId, syncContext.rowNum);
+    } else {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return {
+          valid: false,
+          error: `Invalid email format: ${email}. Use "-", leave blank for placeholder email, or enter a valid address.`
+        };
+      }
+      email = email.toLowerCase();
     }
 
     // Validate and normalize phone format if provided
@@ -358,7 +414,7 @@ class GoogleSheetsSyncService {
         salutation: salutation || undefined,
         firstName,
         lastName,
-        email: email.toLowerCase(),
+        email,
         phone: normalizedPhone || '',
         client,
         username: username || this.generateUsername(email, firstName, lastName),
@@ -535,7 +591,21 @@ class GoogleSheetsSyncService {
     let hour = 0;
     let minute = 0;
     if (timeStr && String(timeStr).trim()) {
-      const t = String(timeStr).trim();
+      // Strip common sheet suffixes: "HRS", "(PM)", "(AM)", trailing whitespace
+      // e.g. "16:00 HRS" → "16:00", "12:05HRS (PM)" → "12:05 PM", "10:15HRS" → "10:15"
+      let t = String(timeStr).trim();
+
+      // Extract optional AM/PM that might appear after HRS (e.g. "12:05HRS (PM)")
+      const ampmSuffix = t.match(/\b(AM|PM)\b/i);
+      const ampmStr = ampmSuffix ? ampmSuffix[1].toUpperCase() : null;
+
+      // Strip any non-time characters (letters, parentheses, spaces) except the colon
+      t = t.replace(/[A-Za-z()\s]/g, '').trim(); // e.g. "1605" or "1205" with HRS stripped
+      // Re-attach AM/PM suffix if found, so 12h regex below matches
+      if (ampmStr) t = `${t} ${ampmStr}`;
+
+      // Normalize "HHMM" without colon (e.g. edge case) → already handled if colon is present
+      // Now attempt matching
       const m12 = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)\s*$/i);
       // 24h "21:00" must not be parsed as 12h; try 24h if no AM/PM match
       const m24 = !m12 ? t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/) : null;
@@ -568,14 +638,20 @@ class GoogleSheetsSyncService {
    *
    * @param {string[]} row - Row as array of cell values
    * @param {Object} colMap - Map of field name -> column index (from buildTransferSyncColumnMap)
+   * @param {{ customerId?: import('mongoose').Types.ObjectId|string, rowNum?: number }} [syncContext] - For placeholder emails
    * @returns {{ valid: boolean, error?: string, data?: Object }}
    */
-  parseRowToTransferSyncFormat(row, colMap) {
+  parseRowToTransferSyncFormat(row, colMap, syncContext = {}) {
     const get = (key) => {
       const idx = colMap[key];
       if (idx == null || idx >= row.length) return null;
       const v = row[idx];
       return v !== undefined && v !== null && String(v).trim() !== '' ? String(v).trim() : null;
+    };
+
+    const getReturn = (key) => {
+      const v = get(key);
+      return this.isSheetEmptyPlaceholder(v) ? null : v;
     };
 
     const companyName = get('companyName');
@@ -585,25 +661,41 @@ class GoogleSheetsSyncService {
     const nameAsPerPassport = get('nameAsPerPassport');
     const passportNumber = get('passportNumber');
     const contactNo = get('contactNo');
-    const email = get('email');
+    let email = get('email');
+    if (this.isSheetEmptyPlaceholder(email)) {
+      email = null;
+    }
     // Onward arrival date/time (landing at KUL). Prefer Arr.* columns; fall back to Dep.* if that’s how the sheet is laid out.
     const onwardArrDate = get('onwardArrDate') || get('arrivalCheckInDate') || get('onwardDepDate');
     const onwardETA = get('onwardETA') || get('eta') || get('onwardETD');
     const arrivalFlightNo = get('arrivalFlightNo');
     const onwardDepAirport = get('onwardDepAirport');
     const onwardArrAirport = get('onwardArrAirport');
-    // New format: Return Flight Dep. Date + ETD (when flight departs)
-    const returnDepDate = get('returnDepDate') || get('checkOutDate');
-    const returnETD = get('returnETD') || get('etd');
-    const returnFlightNo = get('returnFlightNo');
-    const returnDepAirport = get('returnDepAirport');
-    const returnArrAirport = get('returnArrAirport');
-
-    const name = [firstName, lastName].filter(Boolean).join(' ') || nameAsPerPassport || email?.split('@')[0] || '';
+    // Return leg: treat "-" / N/A like empty so onward-only rows do not inherit arrival flight/time as "return"
+    const returnDepDate = getReturn('returnDepDate') || getReturn('checkOutDate');
+    const returnETD = getReturn('returnETD') || getReturn('etd');
+    const returnFlightNo = getReturn('returnFlightNo');
+    const returnDepAirport = getReturn('returnDepAirport');
+    const returnArrAirport = getReturn('returnArrAirport');
 
     if (!email) {
-      return { valid: false, error: 'Missing required field: Email' };
+      email = this.buildSyntheticRegistrationEmail(syncContext);
+    } else {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return {
+          valid: false,
+          error: `Invalid email format: ${email}. Use a valid address, "-" for no email, or leave blank.`
+        };
+      }
+      email = email.toLowerCase();
     }
+
+    const name =
+      [firstName, lastName].filter(Boolean).join(' ') ||
+      nameAsPerPassport ||
+      email.split('@')[0] ||
+      '';
 
     // Skip #ERROR! and invalid phone. Supports (44)7939336353, (49)1732742690, (91)9940158505
     const phone = contactNo && !String(contactNo).includes('#ERROR') ? contactNo : '';
@@ -627,7 +719,7 @@ class GoogleSheetsSyncService {
       name: name || email,
       firstName: firstName || '',
       lastName: lastName || '',
-      email: email.toLowerCase(),
+      email,
       phone,
       salutation: salutation || undefined,
       job_position: '',
@@ -640,8 +732,8 @@ class GoogleSheetsSyncService {
       passport_number: passportNumber || undefined,
       arrival_flight_no: arrivalFlightNo || 'XX000',
       arrival_time: arrivalTime,
-      departure_flight_no: returnFlightNo || arrivalFlightNo || 'XX000',
-      departure_time: departureTime || arrivalTime,
+      departure_flight_no: returnFlightNo || null,
+      departure_time: departureTime || null,
       // Airport codes from sheet (for demo when flight API has ±3 day limit)
       onward_dep_airport: this.toIataCode(onwardDepAirport),
       onward_arr_airport: this.toIataCode(onwardArrAirport),
@@ -1173,7 +1265,10 @@ class GoogleSheetsSyncService {
 
         try {
           // Parse row to traveler data
-          const parsed = this.parseRowToTraveler(row, columnMap);
+          const parsed = this.parseRowToTraveler(row, columnMap, {
+            rowNum: i + 1,
+            syncUserId
+          });
           
           if (!parsed.valid) {
             results.skipped++;
@@ -1446,7 +1541,7 @@ class GoogleSheetsSyncService {
       return false;
     }
     const onward_arrival_time = primary.arrival_time;
-    const return_departure_time = primary.departure_time || onward_arrival_time;
+    const hasReturnLeg = Boolean(primary.departure_time);
     const onwardDepAirport = primary.onward_dep_airport || 'TBD';
     const onwardArrAirport = 'KUL';
     const returnDepAirport = 'KUL';
@@ -1472,47 +1567,58 @@ class GoogleSheetsSyncService {
       special_notes: ''
     };
 
-    const returnDepartureTime = return_departure_time;
-    const returnArrivalTime = primary.departure_time
-      ? new Date(new Date(primary.departure_time).getTime() + 2 * 60 * 60 * 1000).toISOString()
-      : returnDepartureTime;
-    const return_flight_details = {
-      flight_no: (primary.departure_flight_no || primary.arrival_flight_no || 'XX000').toUpperCase().slice(0, 10),
-      airline: 'TBD',
-      departure_airport: returnDepAirport,
-      arrival_airport: returnArrAirport,
-      departure_time: returnDepartureTime,
-      arrival_time: returnArrivalTime,
-      status: 'on_time',
-      delay_minutes: 0,
-      gate: '',
-      terminal: ''
-    };
-    const return_transfer_details = {
-      pickup_location: 'Hotel / Event (TBD)',
-      drop_location: 'Grand Hyatt',
-      event_place: 'Event (TBD)',
-      estimated_pickup_time: returnDepartureTime,
-      special_notes: '',
-      transfer_status: 'pending'
-    };
+    let return_flight_details = null;
+    let return_transfer_details = null;
+    if (hasReturnLeg) {
+      const returnDepartureTime = primary.departure_time;
+      const returnArrivalTime = new Date(
+        new Date(primary.departure_time).getTime() + 2 * 60 * 60 * 1000
+      ).toISOString();
+      return_flight_details = {
+        flight_no: (primary.departure_flight_no || primary.arrival_flight_no || 'XX000').toUpperCase().slice(0, 10),
+        airline: 'TBD',
+        departure_airport: returnDepAirport,
+        arrival_airport: returnArrAirport,
+        departure_time: returnDepartureTime,
+        arrival_time: returnArrivalTime,
+        status: 'on_time',
+        delay_minutes: 0,
+        gate: '',
+        terminal: ''
+      };
+      return_transfer_details = {
+        pickup_location: 'Hotel / Event (TBD)',
+        drop_location: 'Grand Hyatt',
+        event_place: 'Event (TBD)',
+        estimated_pickup_time: returnDepartureTime,
+        special_notes: '',
+        transfer_status: 'pending'
+      };
+    }
 
     try {
-      const [enrichedOnward, enrichedReturn] = await Promise.all([
-        enrichFlightDetails(flight_details, onward_arrival_time),
-        enrichFlightDetails(return_flight_details, returnDepartureTime)
-      ]);
+      const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time);
       if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
-      if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
+      if (hasReturnLeg && return_flight_details) {
+        const enrichedReturn = await enrichFlightDetails(return_flight_details, primary.departure_time);
+        if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
+      }
       flight_details.arrival_airport = 'KUL';
-      return_flight_details.departure_airport = 'KUL';
+      if (return_flight_details) {
+        return_flight_details.departure_airport = 'KUL';
+      }
       if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
         transfer_details.pickup_location =
           flight_details.arrival_airport === 'KUL'
             ? 'Kuala Lumpur International Airport (KUL)'
             : formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
       }
-      if (return_flight_details.departure_airport && return_flight_details.departure_airport !== 'TBD') {
+      if (
+        return_flight_details &&
+        return_transfer_details &&
+        return_flight_details.departure_airport &&
+        return_flight_details.departure_airport !== 'TBD'
+      ) {
         return_transfer_details.drop_location =
           return_flight_details.departure_airport === 'KUL'
             ? 'Kuala Lumpur International Airport (KUL)'
@@ -1612,7 +1718,10 @@ class GoogleSheetsSyncService {
         const rowNum = i + 1;
 
         try {
-          const parsed = this.parseRowToTransferSyncFormat(row, colMap);
+          const parsed = this.parseRowToTransferSyncFormat(row, colMap, {
+            customerId,
+            rowNum: rowNum
+          });
           if (!parsed.valid) {
             results.skipped += 1;
             const emailIdx = colMap.email;
@@ -1701,7 +1810,8 @@ class GoogleSheetsSyncService {
           // Onward leg: use Arrival Date & Time (when flight lands at airport = pickup time).
           // Rows without a parseable onward arrival are rejected in parseRowToTransferSyncFormat (no fake "sync time").
           const onward_arrival_time = primary.arrival_time;
-          const return_departure_time = primary.departure_time || onward_arrival_time;
+          const hasReturnLeg = Boolean(primary.departure_time);
+          const return_departure_time = primary.departure_time;
 
           // Onward Arr. Airport and Return Dep. Airport = KUL for everyone
           const onwardDepAirport = primary.onward_dep_airport || 'TBD';
@@ -1765,7 +1875,8 @@ class GoogleSheetsSyncService {
             };
 
             if (!delegate2.flight_same_as_delegate_1) {
-              const delDeparture = delegate2.departure_time || return_departure_time;
+              const delDeparture =
+                delegate2.departure_time || return_departure_time || onward_arrival_time;
               const delArrival = delegate2.arrival_time || delDeparture;
               traveler_flight_details = {
                 flight_no:
@@ -1788,51 +1899,62 @@ class GoogleSheetsSyncService {
             }
           }
 
-          // Return leg (mandatory by default) – placeholders; can be edited in UI
-          const returnDepartureTime = return_departure_time;
-          const returnArrivalTime = primary.departure_time
-            ? new Date(new Date(primary.departure_time).getTime() + 2 * 60 * 60 * 1000).toISOString()
-            : returnDepartureTime;
-          const return_flight_details = {
-            flight_no: (primary.departure_flight_no || primary.arrival_flight_no || 'XX000').toUpperCase().slice(0, 10),
-            airline: 'TBD',
-            departure_airport: returnDepAirport,
-            arrival_airport: returnArrAirport,
-            departure_time: returnDepartureTime,
-            arrival_time: returnArrivalTime,
-            status: 'on_time',
-            delay_minutes: 0,
-            gate: '',
-            terminal: ''
-          };
-          const return_transfer_details = {
-            pickup_location: 'Hotel / Event (TBD)',
-            drop_location: 'Grand Hyatt',
-            event_place: 'Event (TBD)',
-            estimated_pickup_time: returnDepartureTime,
-            special_notes: '',
-            transfer_status: 'pending'
-          };
+          let return_flight_details = null;
+          let return_transfer_details = null;
+          if (hasReturnLeg && return_departure_time) {
+            const returnDepartureTime = return_departure_time;
+            const returnArrivalTime = new Date(
+              new Date(primary.departure_time).getTime() + 2 * 60 * 60 * 1000
+            ).toISOString();
+            return_flight_details = {
+              flight_no: (primary.departure_flight_no || primary.arrival_flight_no || 'XX000').toUpperCase().slice(0, 10),
+              airline: 'TBD',
+              departure_airport: returnDepAirport,
+              arrival_airport: returnArrAirport,
+              departure_time: returnDepartureTime,
+              arrival_time: returnArrivalTime,
+              status: 'on_time',
+              delay_minutes: 0,
+              gate: '',
+              terminal: ''
+            };
+            return_transfer_details = {
+              pickup_location: 'Hotel / Event (TBD)',
+              drop_location: 'Grand Hyatt',
+              event_place: 'Event (TBD)',
+              estimated_pickup_time: returnDepartureTime,
+              special_notes: '',
+              transfer_status: 'pending'
+            };
+          }
 
           // Fetch flight data from FlightStats (uses sheet dates: Check In Date, Check Out Date)
           try {
-            console.log(`[TransferSync] Row ${rowNum} (${primary.email}): enriching flights – onward ${flight_details.flight_no} (${onward_arrival_time?.slice?.(0, 10) || 'N/A'}), return ${return_flight_details.flight_no} (${returnDepartureTime?.slice?.(0, 10) || 'N/A'})`);
-            const [enrichedOnward, enrichedReturn, enrichedTraveler] = await Promise.all([
-              enrichFlightDetails(flight_details, onward_arrival_time),
-              enrichFlightDetails(return_flight_details, returnDepartureTime),
-              traveler_flight_details && traveler_flight_details.flight_no !== flight_details?.flight_no
-                ? enrichFlightDetails(traveler_flight_details, traveler_flight_details.arrival_time)
-                : Promise.resolve(null)
-            ]);
+            const retLabel = hasReturnLeg && return_flight_details
+              ? `${return_flight_details.flight_no} (${return_departure_time?.slice?.(0, 10) || 'N/A'})`
+              : 'none (onward-only)';
+            console.log(
+              `[TransferSync] Row ${rowNum} (${primary.email}): enriching flights – onward ${flight_details.flight_no} (${onward_arrival_time?.slice?.(0, 10) || 'N/A'}), return ${retLabel}`
+            );
+            const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time);
             if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
-            if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
+            if (hasReturnLeg && return_flight_details && return_departure_time) {
+              const enrichedReturn = await enrichFlightDetails(return_flight_details, return_departure_time);
+              if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
+            }
+            const enrichedTraveler =
+              traveler_flight_details && traveler_flight_details.flight_no !== flight_details?.flight_no
+                ? await enrichFlightDetails(traveler_flight_details, traveler_flight_details.arrival_time)
+                : null;
             if (enrichedTraveler && delegates.length > 0) {
               delegates[0].flight_details = enrichedTraveler;
               traveler_flight_details = enrichedTraveler;
             }
             // Enforce KUL for onward arrival and return departure
             flight_details.arrival_airport = 'KUL';
-            return_flight_details.departure_airport = 'KUL';
+            if (return_flight_details) {
+              return_flight_details.departure_airport = 'KUL';
+            }
 
             // Update pickup/drop from airport – KUL uses specific label
             if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
@@ -1840,7 +1962,12 @@ class GoogleSheetsSyncService {
                 ? 'Kuala Lumpur International Airport (KUL)'
                 : formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
             }
-            if (return_flight_details.departure_airport && return_flight_details.departure_airport !== 'TBD') {
+            if (
+              return_flight_details &&
+              return_transfer_details &&
+              return_flight_details.departure_airport &&
+              return_flight_details.departure_airport !== 'TBD'
+            ) {
               return_transfer_details.drop_location = return_flight_details.departure_airport === 'KUL'
                 ? 'Kuala Lumpur International Airport (KUL)'
                 : formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
