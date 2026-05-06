@@ -3,7 +3,7 @@ const moment = require('moment-timezone');
 const User = require('../models/User');
 const Transfer = require('../models/Transfer');
 const bcrypt = require('bcryptjs');
-const { enrichFlightDetails, formatAirportLocation, syncEstimatedPickupTimesFromFlights } = require('./flightEnrichmentHelper');
+const { formatAirportLocation, syncEstimatedPickupTimesFromFlights, getAirlineFromFlightNumber } = require('./flightEnrichmentHelper');
 const { getTimezoneForIata } = require('./iataTimezones');
 
 /**
@@ -1596,41 +1596,33 @@ class GoogleSheetsSyncService {
       };
     }
 
-    try {
-      // keepSheetTimes: sheet-provided arrival/departure times are authoritative.
-      // FlightStats may only supply metadata (airline, terminal, gate, status) and the
-      // origin departure_time for the onward leg (which the sheet does not contain).
-      const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time, { keepSheetTimes: true });
-      if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
-      if (hasReturnLeg && return_flight_details) {
-        const enrichedReturn = await enrichFlightDetails(return_flight_details, primary.departure_time, { keepSheetTimes: true });
-        if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
-      }
-      flight_details.arrival_airport = 'KUL';
-      if (return_flight_details) {
-        return_flight_details.departure_airport = 'KUL';
-      }
-      if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
-        transfer_details.pickup_location =
-          flight_details.arrival_airport === 'KUL'
-            ? 'Kuala Lumpur International Airport (KUL)'
-            : formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
-      }
-      if (
-        return_flight_details &&
-        return_transfer_details &&
-        return_flight_details.departure_airport &&
-        return_flight_details.departure_airport !== 'TBD'
-      ) {
-        return_transfer_details.drop_location =
-          return_flight_details.departure_airport === 'KUL'
-            ? 'Kuala Lumpur International Airport (KUL)'
-            : formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
-      }
-      syncEstimatedPickupTimesFromFlights(transfer_details, flight_details, return_transfer_details, return_flight_details);
-    } catch (e) {
-      console.warn(`[TransferSync] Merged rows ${rowsLabel} flight enrichment failed:`, e.message);
+    // Sheet data is authoritative — no external flight API calls during sync.
+    // Resolve airline from flight-number prefix; everything else comes from the sheet.
+    // Missing values are left null/undefined so the UI shows "—".
+    flight_details.airline = getAirlineFromFlightNumber(flight_details.flight_no) || 'TBD';
+    flight_details.arrival_airport = 'KUL';
+    if (return_flight_details) {
+      return_flight_details.airline = getAirlineFromFlightNumber(return_flight_details.flight_no) || 'TBD';
+      return_flight_details.departure_airport = 'KUL';
     }
+    if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
+      transfer_details.pickup_location =
+        flight_details.arrival_airport === 'KUL'
+          ? 'Kuala Lumpur International Airport (KUL)'
+          : formatAirportLocation(flight_details.arrival_airport);
+    }
+    if (
+      return_flight_details &&
+      return_transfer_details &&
+      return_flight_details.departure_airport &&
+      return_flight_details.departure_airport !== 'TBD'
+    ) {
+      return_transfer_details.drop_location =
+        return_flight_details.departure_airport === 'KUL'
+          ? 'Kuala Lumpur International Airport (KUL)'
+          : formatAirportLocation(return_flight_details.departure_airport);
+    }
+    syncEstimatedPickupTimesFromFlights(transfer_details, flight_details, return_transfer_details, return_flight_details);
 
     const rawName = primary.name || 'Client';
     const namePart = rawName.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 20) || 'X';
@@ -1931,54 +1923,35 @@ class GoogleSheetsSyncService {
             };
           }
 
-          // Fetch flight data from FlightStats (uses sheet dates: Check In Date, Check Out Date)
-          try {
-            const retLabel = hasReturnLeg && return_flight_details
-              ? `${return_flight_details.flight_no} (${return_departure_time?.slice?.(0, 10) || 'N/A'})`
-              : 'none (onward-only)';
-            console.log(
-              `[TransferSync] Row ${rowNum} (${primary.email}): enriching flights – onward ${flight_details.flight_no} (${onward_arrival_time?.slice?.(0, 10) || 'N/A'}), return ${retLabel}`
-            );
-            const enrichedOnward = await enrichFlightDetails(flight_details, onward_arrival_time, { keepSheetTimes: true });
-            if (enrichedOnward) Object.assign(flight_details, enrichedOnward);
-            if (hasReturnLeg && return_flight_details && return_departure_time) {
-              const enrichedReturn = await enrichFlightDetails(return_flight_details, return_departure_time, { keepSheetTimes: true });
-              if (enrichedReturn) Object.assign(return_flight_details, enrichedReturn);
-            }
-            const enrichedTraveler =
-              traveler_flight_details && traveler_flight_details.flight_no !== flight_details?.flight_no
-                ? await enrichFlightDetails(traveler_flight_details, traveler_flight_details.arrival_time, { keepSheetTimes: true })
-                : null;
-            if (enrichedTraveler && delegates.length > 0) {
-              delegates[0].flight_details = enrichedTraveler;
-              traveler_flight_details = enrichedTraveler;
-            }
-            // Enforce KUL for onward arrival and return departure
-            flight_details.arrival_airport = 'KUL';
-            if (return_flight_details) {
-              return_flight_details.departure_airport = 'KUL';
-            }
-
-            // Update pickup/drop from airport – KUL uses specific label
-            if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
-              transfer_details.pickup_location = flight_details.arrival_airport === 'KUL'
-                ? 'Kuala Lumpur International Airport (KUL)'
-                : formatAirportLocation(flight_details.arrival_airport, flight_details.arrival_airport_name);
-            }
-            if (
-              return_flight_details &&
-              return_transfer_details &&
-              return_flight_details.departure_airport &&
-              return_flight_details.departure_airport !== 'TBD'
-            ) {
-              return_transfer_details.drop_location = return_flight_details.departure_airport === 'KUL'
-                ? 'Kuala Lumpur International Airport (KUL)'
-                : formatAirportLocation(return_flight_details.departure_airport, return_flight_details.departure_airport_name);
-            }
-            syncEstimatedPickupTimesFromFlights(transfer_details, flight_details, return_transfer_details, return_flight_details);
-          } catch (e) {
-            console.warn(`[TransferSync] Row ${rowNum} flight enrichment failed:`, e.message, '– continuing with TBD');
+          // Sheet data is authoritative — no external flight API calls during sync.
+          // Resolve airline from flight-number prefix; everything else comes from the sheet.
+          // Missing values are left null/undefined so the UI shows "—".
+          flight_details.airline = getAirlineFromFlightNumber(flight_details.flight_no) || 'TBD';
+          flight_details.arrival_airport = 'KUL';
+          if (return_flight_details) {
+            return_flight_details.airline = getAirlineFromFlightNumber(return_flight_details.flight_no) || 'TBD';
+            return_flight_details.departure_airport = 'KUL';
           }
+          if (traveler_flight_details && traveler_flight_details.flight_no !== flight_details?.flight_no) {
+            traveler_flight_details.airline = getAirlineFromFlightNumber(traveler_flight_details.flight_no) || 'TBD';
+            if (delegates.length > 0) delegates[0].flight_details = traveler_flight_details;
+          }
+          if (flight_details.arrival_airport && flight_details.arrival_airport !== 'TBD') {
+            transfer_details.pickup_location = flight_details.arrival_airport === 'KUL'
+              ? 'Kuala Lumpur International Airport (KUL)'
+              : formatAirportLocation(flight_details.arrival_airport);
+          }
+          if (
+            return_flight_details &&
+            return_transfer_details &&
+            return_flight_details.departure_airport &&
+            return_flight_details.departure_airport !== 'TBD'
+          ) {
+            return_transfer_details.drop_location = return_flight_details.departure_airport === 'KUL'
+              ? 'Kuala Lumpur International Airport (KUL)'
+              : formatAirportLocation(return_flight_details.departure_airport);
+          }
+          syncEstimatedPickupTimesFromFlights(transfer_details, flight_details, return_transfer_details, return_flight_details);
 
           // Generate APEX ID similar to transferController.generateApexId
           const rawName = primary.name || 'Client';

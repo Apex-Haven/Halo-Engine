@@ -211,4 +211,4 @@ function syncEstimatedPickupTimesFromFlights(transferDetails, flightDetails, ret
   }
 }
 
-module.exports = { enrichFlightDetails, formatAirportLocation, syncEstimatedPickupTimesFromFlights };
+module.exports = { enrichFlightDetails, formatAirportLocation, syncEstimatedPickupTimesFromFlights, getAirlineFromFlightNumber };
